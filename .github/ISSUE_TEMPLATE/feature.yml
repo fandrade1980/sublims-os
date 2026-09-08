@@ -1,0 +1,47 @@
+name: Funcionalidade ou correção
+description: Define o problema antes da especificação e do código.
+title: "[Issue] "
+labels: ["needs-spec"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problema
+      description: Quem enfrenta o problema, em qual situação e com qual impacto?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Resultado observável
+      description: O que deve passar a ser possível verificar?
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Escopo inicial
+      description: Liste o que precisa entrar e o que fica de fora.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Critérios de aceite
+      description: Descreva cenários verificáveis, sem prescrever a implementação.
+    validations:
+      required: true
+  - type: textarea
+    id: risks
+    attributes:
+      label: Riscos e dados envolvidos
+      description: Informe impacto financeiro, dados pessoais, autenticação, migration, integração ou operação.
+    validations:
+      required: true
+  - type: checkboxes
+    id: authorization
+    attributes:
+      label: Autoridade
+      options:
+        - label: Esta issue não autoriza merge, deploy, acesso à VPS, dados reais ou envio de mensagens.
+          required: true

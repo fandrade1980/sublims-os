@@ -1,0 +1,11 @@
+node_modules/
+coverage/
+.next/
+dist/
+*.log
+.env
+.env.*
+!.env.example
+.review-input/
+pr-head/
+

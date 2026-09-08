@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "task": "task:004",
+  "steps": [
+    {
+      "id": "review-product-and-process",
+      "agent": "product",
+      "mode": "read",
+      "dependsOn": [],
+      "reads": ["specs/004-ai-engineering-system.md", "docs/team-operating-model.md"],
+      "writes": []
+    },
+    {
+      "id": "review-platform",
+      "agent": "platform-devops",
+      "mode": "read",
+      "dependsOn": [],
+      "reads": ["specs/004-ai-engineering-system.md", "docs/infrastructure-target.md"],
+      "writes": []
+    },
+    {
+      "id": "review-security",
+      "agent": "security-data-reviewer",
+      "mode": "read",
+      "dependsOn": [],
+      "reads": ["specs/004-ai-engineering-system.md", "AGENTS.md"],
+      "writes": []
+    },
+    {
+      "id": "consolidate-plan",
+      "agent": "orchestrator",
+      "mode": "read",
+      "dependsOn": ["review-product-and-process", "review-platform", "review-security"],
+      "reads": ["context/graph.json", "orchestration/plans/004.json"],
+      "writes": []
+    },
+    {
+      "id": "implement-governance",
+      "agent": "developer",
+      "mode": "write",
+      "dependsOn": ["consolidate-plan"],
+      "reads": ["**"],
+      "writes": ["tooling/**", ".claude/**", "context/**", "orchestration/**", "quality/**", "templates/**"]
+    },
+    {
+      "id": "implement-platform-files",
+      "agent": "platform-devops",
+      "mode": "write",
+      "dependsOn": ["implement-governance"],
+      "reads": ["**"],
+      "writes": [".github/**", "ops/**", "docs/ai-engineering-system.md", "docs/daily-operations.md"]
+    },
+    {
+      "id": "deterministic-gates",
+      "agent": "reviewer",
+      "mode": "read",
+      "dependsOn": ["implement-platform-files"],
+      "reads": ["tooling/**", "quality/**", ".github/**"],
+      "writes": []
+    },
+    {
+      "id": "independent-code-review",
+      "agent": "reviewer",
+      "mode": "read",
+      "dependsOn": ["deterministic-gates"],
+      "reads": ["**"],
+      "writes": []
+    },
+    {
+      "id": "independent-security-review",
+      "agent": "security-data-reviewer",
+      "mode": "read",
+      "dependsOn": ["deterministic-gates"],
+      "reads": [".github/**", "ops/**", "tooling/**"],
+      "writes": []
+    }
+  ]
+}

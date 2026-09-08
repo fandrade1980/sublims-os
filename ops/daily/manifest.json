@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "enabled": false,
+  "timezone": "America/Sao_Paulo",
+  "activationState": "pending-human-configuration",
+  "routines": [
+    {
+      "id": "application-health",
+      "collector": "deterministic-health-check",
+      "agent": "operations-monitor",
+      "schedule": null,
+      "mode": "observe",
+      "mutationsAllowed": false
+    },
+    {
+      "id": "database-backup",
+      "collector": "approved-postgresql-backup-job",
+      "agent": "backup-auditor",
+      "schedule": null,
+      "mode": "audit",
+      "mutationsAllowed": false
+    },
+    {
+      "id": "subscription-status",
+      "collector": "approved-billing-reconciliation",
+      "agent": "subscription-auditor",
+      "schedule": null,
+      "mode": "observe",
+      "mutationsAllowed": false
+    },
+    {
+      "id": "support-triage",
+      "collector": "approved-support-adapter",
+      "agent": "support-triage",
+      "schedule": null,
+      "mode": "draft-only",
+      "mutationsAllowed": false
+    },
+    {
+      "id": "daily-report",
+      "collector": "sanitized-routine-results",
+      "agent": "daily-reporter",
+      "schedule": null,
+      "mode": "draft-only",
+      "mutationsAllowed": false,
+      "dependsOn": ["application-health", "database-backup", "subscription-status", "support-triage"]
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "coverage": {
+    "lines": 80,
+    "branches": 75,
+    "functions": 80,
+    "statements": 80
+  },
+  "complexity": {
+    "maxCyclomaticPerFunction": 10,
+    "exceptionsRequire": ["justificativa na spec", "aprovação do reviewer"]
+  },
+  "dependencies": {
+    "rules": [
+      "domain não importa UI",
+      "domain não importa banco, rede, relógio ou automação",
+      "módulos não acessam adapters de outro módulo diretamente",
+      "n8n e IA dependem de interfaces da aplicação"
+    ]
+  },
+  "load": {
+    "enabled": false,
+    "reason": "Aguardando endpoint, cenário, volume, latência-alvo e ambiente efêmero aprovados.",
+    "productionTargetsAllowed": false
+  },
+  "requiredApplicationScripts": [
+    "lint",
+    "typecheck",
+    "test:coverage",
+    "quality:complexity",
+    "quality:dependencies",
+    "build"
+  ]
+}

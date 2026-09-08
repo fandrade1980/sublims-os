@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "enabled": false,
+  "reason": "A Tarefa 000 ainda não definiu runner, comandos diretos, cobertura, analisador de complexidade, regras de dependência e cenário de carga.",
+  "commands": []
+}

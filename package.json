@@ -1,0 +1,17 @@
+{
+  "name": "sublims-os-governance",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test:governance": "node --test --test-concurrency=1 tooling/**/*.test.mjs",
+    "validate:spec": "node tooling/governance/validate-spec.mjs",
+    "validate:context": "node tooling/context/validate-context-graph.mjs context/graph.json",
+    "validate:orchestration": "node tooling/orchestration/validate-execution-plan.mjs orchestration/plans/004.json",
+    "context:select": "node tooling/context/select-context.mjs",
+    "quality:governance": "npm run test:governance && npm run validate:context && npm run validate:orchestration && npm run validate:spec -- specs/004-ai-engineering-system.md"
+  }
+}

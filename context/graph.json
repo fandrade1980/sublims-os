@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "nodes": [
+    { "id": "policy:project", "type": "policy", "path": "AGENTS.md" },
+    { "id": "context:domain", "type": "context", "path": "CONTEXT.md" },
+    { "id": "doc:product", "type": "document", "path": "docs/product.md" },
+    { "id": "doc:architecture", "type": "document", "path": "docs/architecture.md" },
+    { "id": "doc:domain-rules", "type": "document", "path": "docs/domain-rules.md" },
+    { "id": "doc:team", "type": "document", "path": "docs/team-operating-model.md" },
+    { "id": "doc:infrastructure", "type": "document", "path": "docs/infrastructure-target.md" },
+    { "id": "task:000", "type": "task", "path": "tasks/000-foundation.md" },
+    { "id": "task:001", "type": "task", "path": "tasks/001-pricing-engine.md" },
+    { "id": "task:002", "type": "task", "path": "tasks/002-catalog-recipes.md" },
+    { "id": "task:003", "type": "task", "path": "tasks/003-infrastructure-baseline.md" },
+    { "id": "spec:004", "type": "spec", "path": "specs/004-ai-engineering-system.md" },
+    { "id": "task:004", "type": "task", "path": "tasks/004-ai-engineering-system.md" }
+  ],
+  "edges": [
+    { "from": "doc:product", "to": "policy:project", "relation": "requires" },
+    { "from": "doc:architecture", "to": "doc:product", "relation": "requires" },
+    { "from": "doc:architecture", "to": "context:domain", "relation": "requires" },
+    { "from": "doc:domain-rules", "to": "context:domain", "relation": "requires" },
+    { "from": "doc:team", "to": "policy:project", "relation": "requires" },
+    { "from": "doc:infrastructure", "to": "policy:project", "relation": "requires" },
+    { "from": "task:000", "to": "doc:architecture", "relation": "requires" },
+    { "from": "task:000", "to": "doc:infrastructure", "relation": "requires" },
+    { "from": "task:000", "to": "doc:team", "relation": "requires" },
+    { "from": "task:001", "to": "doc:architecture", "relation": "requires" },
+    { "from": "task:001", "to": "doc:domain-rules", "relation": "requires" },
+    { "from": "task:002", "to": "doc:architecture", "relation": "requires" },
+    { "from": "task:002", "to": "doc:domain-rules", "relation": "requires" },
+    { "from": "task:003", "to": "doc:infrastructure", "relation": "requires" },
+    { "from": "task:003", "to": "doc:team", "relation": "requires" },
+    { "from": "spec:004", "to": "doc:architecture", "relation": "requires" },
+    { "from": "spec:004", "to": "doc:domain-rules", "relation": "requires" },
+    { "from": "spec:004", "to": "doc:infrastructure", "relation": "requires" },
+    { "from": "spec:004", "to": "doc:team", "relation": "requires" },
+    { "from": "task:004", "to": "spec:004", "relation": "requires" }
+  ]
+}
