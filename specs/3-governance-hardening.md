@@ -29,6 +29,7 @@ Antes de acrescentar a fundação do produto, defeitos da própria governança p
 9. **Risco de versionamento acidental.** Existe na raiz um documento de trabalho não rastreado, e `.gitignore` não cobre chaves, dumps, backups nem credenciais de ferramenta.
 10. **Confusão entre PR de spec e PR de implementação.** A regra existe em `validate-pr.mjs` (linha 79), mas não está em `AGENTS.md`, e `templates/spec.md` contradiz o validador quanto ao estado da spec.
 11. **Revisão por IA sem efeito de bloqueio garantido.** O resultado da revisão precisa ser publicado no commit que a proteção da branch avalia. Publicar no commit errado produz um check verde irrelevante.
+12. **Falha técnica confundida com achado crítico.** Sem orçamento dimensionado e sem classificação explícita, uma revisão que se esgota por limite de turnos, timeout ou erro de API produz reprovação indistinguível de uma reprovação por defeito real do código. Isso corrói a confiança no gate e leva a ignorá-lo.
 
 Quem sofre: quem revisa e quem mescla. Sem estas correções, o gate aprova por omissão em vez de reprovar por evidência, e a revisão humana passa a ser a única defesa real.
 
@@ -224,7 +225,25 @@ O check publicado falha quando: a saída estruturada estiver ausente ou malforma
 
 A proteção da branch exige o **nome exato** desse check e sua **origem esperada**, de modo que um check homônimo produzido por outra origem não satisfaça a exigência.
 
-### Item 21 — permissões exatas por job
+### Item 21 — orçamento e conclusividade da revisão
+
+Um veredito de revisão só é informação útil quando o revisor teve orçamento para produzi-lo e quando o resultado distingue defeito de indisponibilidade.
+
+**Orçamento dimensionado.** O limite de turnos e o timeout do job de revisão são dimensionados e testados para o **maior diff que a política permite**, conforme os limites declarados no item 19. Orçamento não é escolhido por tentativa: existe teste que exercita o limite máximo aceito de tamanho de diff e comprova que a revisão produz saída estruturada válida dentro do orçamento.
+
+**Classificação de falhas.** São falhas técnicas ou inconclusivas, não achados: esgotamento do limite de turnos; timeout do job; erro da API; saída estruturada ausente ou inválida; e esgotamento causado por tentativas de uso de ferramentas negadas.
+
+Todas continuam **bloqueando o merge de forma fail-closed** — ausência de veredito nunca é aprovação. Nenhuma delas, porém, pode ser apresentada como "falha crítica encontrada", porque nada foi encontrado: a revisão não concluiu.
+
+**Três estados distintos.** O relatório e o check publicado distinguem explicitamente: revisão aprovada, sem achado crítico; achado crítico, com a evidência correspondente; e revisão inconclusiva por falha técnica ou de configuração, com a causa classificada. O terceiro estado nomeia a causa e não é rotulado com a linguagem do segundo.
+
+**Compatibilidade entre ferramentas e prompt.** A lista de ferramentas permitidas ao agente e as instruções do prompt precisam ser coerentes: o prompt não pode solicitar, direta ou indiretamente, ação que exija ferramenta ausente da lista. Cada tentativa negada consome orçamento sem produzir revisão. O canário de ponta a ponta comprova conclusão **sem nenhuma tentativa de ferramenta proibida**.
+
+**Retry.** Repetição automática é opcional. Se implementada, precisa ser limitada em quantidade e permitida somente para falhas transitórias explicitamente classificadas como tais. Repetição nunca pode transformar ausência de veredito em aprovação, e o esgotamento das tentativas mantém o estado inconclusivo e o bloqueio.
+
+**Evidência operacional que originou este requisito.** O PR #6, que propôs esta própria especificação, teve o check `claude-critical-review` reprovado após 9 minutos e 33 segundos. A execução terminou com `subtype: error_max_turns`, `num_turns: 11` contra um limite configurado de 10, `permission_denials_count: 3` e ausência de `structured_output`. O passo de veredito fail-closed ficou como não executado, e nenhum achado foi produzido. O diff em análise tinha 519 linhas em um único arquivo. O comportamento de bloqueio estava correto; o que faltou foi orçamento compatível com o material, e o resultado foi exibido sem distinguir falha técnica de achado crítico.
+
+### Item 22 — permissões exatas por job
 
 - `governance` e `quality`: somente `contents: read`. Sem `id-token`, sem qualquer permissão de escrita, sem segredo.
 - Revisão por IA: `contents: read` e `pull-requests: read`, além exclusivamente do segredo dedicado da Anthropic e do `GITHUB_TOKEN` efêmero.
@@ -233,19 +252,19 @@ A proteção da branch exige o **nome exato** desse check e sua **origem esperad
 
 O cache chaveado por arquivo do candidato é removido do job que executa código não confiável.
 
-### Item 22 — bootstrap verificado da própria Fase 0
+### Item 23 — bootstrap verificado da própria Fase 0
 
 O PR de implementação desta especificação não pode se limitar a alterar validadores: precisa provar que o mecanismo resultante funciona sobre um repositório com a forma real da base.
 
 A implementação executa, e anexa como evidência: as novas suítes candidatas de governança; uma simulação de ponta a ponta em ambiente descartável, com base sem aplicação, política nova ativa e um candidato mínimo; uma execução limpa em que os seis gates passam; e seis execuções em que cada canário falha isoladamente, uma por gate.
 
-### Item 23 — isolamento das execuções
+### Item 24 — isolamento das execuções
 
 Cada execução limpa ou de canário usa workspace temporário novo, timeout explícito e instalação isolada.
 
 Não há reuso de `node_modules`, de configuração nem de artefatos mutados entre gates ou entre execuções. Ao final de cada execução de canário, a implementação confirma que nenhuma mutação permaneceu para a execução seguinte, de modo que uma falha não possa ser herdada nem mascarada.
 
-### Item 24 — higiene de repositório e adição explícita ao Git
+### Item 25 — higiene de repositório e adição explícita ao Git
 
 `.gitignore` passa a ignorar o documento de trabalho da raiz e é endurecido para cobrir chaves e certificados, credenciais de ferramenta, dumps e backups, arquivos de sobreposição de container, artefatos de build e arquivos de sistema operacional.
 
@@ -253,7 +272,7 @@ Não há reuso de `node_modules`, de configuração nem de artefatos mutados ent
 
 `AGENTS.md` passa a documentar que `git add` usa sempre caminhos explícitos, e que `git add -A`, `git add .` e `git commit -a` são proibidos para qualquer agente ou script.
 
-### Item 25 — correção da referência a `buffet-mvp` e alinhamento do template
+### Item 26 — correção da referência a `buffet-mvp` e alinhamento do template
 
 `docs/architecture.md` passa a descrever `buffet-mvp` como protótipo externo arquivado fora deste repositório, mantendo os oito motivos pelos quais não deve ser promovido a produção e acrescentando que nenhum arquivo, schema, histórico git ou arquivo de ambiente é importado.
 
@@ -290,9 +309,12 @@ Não há reuso de `node_modules`, de configuração nem de artefatos mutados ent
 15. `pull_request_target` só é admissível em workflow controlado pela base que não faça checkout nem execute o head.
 16. Credencial nenhuma entra no prompt ou nas ferramentas do agente.
 17. Veredito de revisão só tem valor quando publicado no commit que a proteção da branch avalia, com o SHA confirmado por consulta e não presumido.
-18. Isenção de campos de PR é estreita, inferida de metadados confiáveis, e fail-closed: falha de condição reprova, não converte.
-19. Automação não altera sozinha o mecanismo que a fiscaliza: mudança em `.github/`, `tooling/` e `quality/**` exige inspeção humana explícita.
-20. PR de especificação toca somente `specs/` e `tasks/`; plano de execução e grafo entram no PR de implementação.
+18. Revisão sem veredito bloqueia, mas não acusa. Falha técnica ou inconclusiva nunca é apresentada como achado crítico.
+19. Orçamento de revisão é dimensionado para o maior diff que a política permite, e essa suficiência é testada, não presumida.
+20. Repetição automática só alcança falhas transitórias explicitamente classificadas, é limitada em quantidade, e jamais converte ausência de veredito em aprovação.
+21. Isenção de campos de PR é estreita, inferida de metadados confiáveis, e fail-closed: falha de condição reprova, não converte.
+22. Automação não altera sozinha o mecanismo que a fiscaliza: mudança em `.github/`, `tooling/` e `quality/**` exige inspeção humana explícita.
+23. PR de especificação toca somente `specs/` e `tasks/`; plano de execução e grafo entram no PR de implementação.
 
 ## Superfícies de teste
 
@@ -307,6 +329,10 @@ Não há reuso de `node_modules`, de configuração nem de artefatos mutados ent
 - Parser da lista de alterações: entrada NUL-safe como `Buffer`, status aceitos, entradas inválidas rejeitadas.
 - Materializador do diff de revisão: paginação, conferência com `changed_files`, patch ausente ou truncado, limites e binários.
 - Publisher do check: resolução do SHA por consulta, comparação com o estado inicial, e as cinco condições de falha.
+- Classificador de resultado da revisão: os três estados observáveis, e o mapeamento de cada causa técnica para o estado inconclusivo.
+- Orçamento de revisão: execução no limite máximo de tamanho de diff permitido pela política, comprovando saída estruturada dentro do limite de turnos e do timeout.
+- Coerência entre lista de ferramentas permitidas e prompt do revisor, medida pela contagem de tentativas negadas.
+- Política de repetição: classificação de transitoriedade, limite de tentativas e impossibilidade de aprovar sem veredito.
 - `.github/workflows/**` como dado verificável, por lint estático.
 - `.gitignore` como dado verificável.
 - Paridade de versão entre `.nvmrc`, `engines.node` e o workflow.
@@ -453,23 +479,40 @@ Não há reuso de `node_modules`, de configuração nem de artefatos mutados ent
 96. O check falha quando não é possível identificar com segurança o SHA avaliado.
 97. A proteção da branch exige o nome exato do check e sua origem esperada.
 
+**Orçamento e conclusividade da revisão**
+
+98. O limite de turnos e o timeout do job de revisão estão dimensionados para o maior diff permitido pelos limites declarados no item 19 do Escopo.
+99. Existe teste que exercita o limite máximo aceito de tamanho de diff e comprova que a revisão produz saída estruturada válida dentro do orçamento.
+100. Esgotamento do limite de turnos é classificado como falha técnica ou inconclusiva, nunca como achado.
+101. Timeout do job é classificado como falha técnica ou inconclusiva.
+102. Erro da API é classificado como falha técnica ou inconclusiva.
+103. Saída estruturada ausente ou inválida é classificada como falha técnica ou inconclusiva.
+104. Esgotamento causado por tentativas de uso de ferramentas negadas é classificado como falha técnica ou inconclusiva.
+105. Toda falha das cinco classes acima bloqueia o merge de forma fail-closed.
+106. Nenhuma falha dessas classes é apresentada com a linguagem de achado crítico.
+107. O relatório e o check distinguem explicitamente três estados: revisão aprovada, achado crítico, e revisão inconclusiva por falha técnica ou de configuração, com a causa nomeada.
+108. A lista de ferramentas permitidas ao agente e o prompt do revisor são coerentes: o prompt não solicita ação que exija ferramenta ausente da lista.
+109. O canário de ponta a ponta comprova conclusão da revisão sem nenhuma tentativa de ferramenta proibida.
+110. Repetição automática, quando implementada, é limitada em quantidade e restrita a falhas transitórias explicitamente classificadas.
+111. Repetição automática nunca converte ausência de veredito em aprovação, e o esgotamento das tentativas mantém o estado inconclusivo e o bloqueio.
+
 **Bootstrap e isolamento**
 
-98. O PR de implementação executa as novas suítes candidatas de governança.
-99. O PR de implementação executa uma simulação de ponta a ponta descartável, com base sem aplicação, política nova ativa e candidato mínimo.
-100. O PR de implementação executa uma execução limpa em que os seis gates passam.
-101. O PR de implementação executa seis execuções em que cada canário falha isoladamente, uma por gate.
-102. Cada execução usa workspace temporário novo, timeout explícito e instalação isolada.
-103. Não há reuso de `node_modules`, configuração ou artefatos mutados entre gates ou execuções.
-104. Ao final de cada execução de canário, é confirmado que nenhuma mutação permaneceu para a execução seguinte.
+112. O PR de implementação executa as novas suítes candidatas de governança.
+113. O PR de implementação executa uma simulação de ponta a ponta descartável, com base sem aplicação, política nova ativa e candidato mínimo.
+114. O PR de implementação executa uma execução limpa em que os seis gates passam.
+115. O PR de implementação executa seis execuções em que cada canário falha isoladamente, uma por gate.
+116. Cada execução usa workspace temporário novo, timeout explícito e instalação isolada.
+117. Não há reuso de `node_modules`, configuração ou artefatos mutados entre gates ou execuções.
+118. Ao final de cada execução de canário, é confirmado que nenhuma mutação permaneceu para a execução seguinte.
 
 **Higiene e governança**
 
-105. `.gitignore` ignora o documento de trabalho da raiz, evitando inclusão acidental, e o gate reprova o PR caso esse caminho apareça na lista de alterações.
-106. O gate reprova caminho proibido na lista de alterações, incluindo `.env` que não seja `.env.example`, chaves, dumps, backups e `.npmrc`.
-107. Nenhum documento referencia `buffet-mvp` como caminho deste repositório.
-108. `AGENTS.md` documenta o uso de caminhos explícitos em `git add` e proíbe adição indiscriminada.
-109. `npm run quality:governance` passa e todas as suítes de `tooling/**` continuam verdes.
+119. `.gitignore` ignora o documento de trabalho da raiz, evitando inclusão acidental, e o gate reprova o PR caso esse caminho apareça na lista de alterações.
+120. O gate reprova caminho proibido na lista de alterações, incluindo `.env` que não seja `.env.example`, chaves, dumps, backups e `.npmrc`.
+121. Nenhum documento referencia `buffet-mvp` como caminho deste repositório.
+122. `AGENTS.md` documenta o uso de caminhos explícitos em `git add` e proíbe adição indiscriminada.
+123. `npm run quality:governance` passa e todas as suítes de `tooling/**` continuam verdes.
 
 ## Riscos e decisões pendentes
 
@@ -484,6 +527,10 @@ Não há reuso de `node_modules`, de configuração nem de artefatos mutados ent
 **Modo individual e revisão por segundo code owner.** Com um único mantenedor, `CODEOWNERS` e aprovação obrigatória existem mas não protegem: o autor não aprova o próprio PR de forma significativa. Enquanto durar esse modo, são aceitos somente PRs do proprietário ou de colaboradores explicitamente confiáveis, com inspeção manual dos arquivos de governança em todo PR. Antes de aceitar contribuições externas, é exigido um segundo code owner humano ou a migração para organização ou plano que permita fluxos de trabalho obrigatórios protegidos.
 
 **Limites de materialização do diff.** PR muito grande pode exceder os limites declarados e ser reprovado por não poder ser revisado integralmente. Isso é intencional, mas cria atrito: a mitigação é dividir a mudança, não elevar o limite dentro do PR afetado.
+
+**Orçamento de revisão observado em campo.** O PR #6, que propôs esta própria especificação, reprovou por `error_max_turns` com `num_turns: 11` contra limite 10, `permission_denials_count: 3` e sem `structured_output`, sobre um diff de 519 linhas em um arquivo. O bloqueio foi correto, mas o resultado não distinguia falha técnica de defeito encontrado. O risco residual permanece: orçamento é dimensionado para o limite declarado da política, e um material dentro do limite ainda pode exigir mais turnos que o previsto em casos atípicos. A mitigação é o teste no limite máximo, a classificação explícita do estado inconclusivo, e a proibição de tratar ausência de veredito como aprovação. Elevar o orçamento dentro do PR afetado não é caminho aceitável.
+
+**Tensão entre orçamento e limite de diff.** Aumentar o limite de tamanho de diff aceito exige reavaliar o orçamento de turnos e o timeout, e o inverso também vale. Os dois parâmetros são acoplados e não podem ser alterados isoladamente sem novo teste no limite.
 
 **Intervalo entre esta implementação e a fundação.** Com a política ativa e sem aplicação na base, qualquer PR que toque caminhos cobertos dispara os seis gates e falha. Mitigação declarada no item 14 do Escopo.
 
@@ -511,6 +558,11 @@ Não há reuso de `node_modules`, de configuração nem de artefatos mutados ent
 - Demonstração da isenção automatizada: PR npm restrito a manifesto e lockfile aceito sem `Issue` e `Spec`; o mesmo PR com arquivo adicional reprovado; PR de `github-actions` não isento.
 - Demonstração da materialização do diff: paginação completa, divergência com `changed_files` reprovada, patch truncado reprovado e binário encaminhado ao fluxo manual.
 - Demonstração da publicação do veredito: check publicado no SHA obtido por consulta, e as cinco condições de falha exercitadas.
+- Saída da revisão executada no limite máximo de tamanho de diff permitido, com `structured_output` válido dentro do limite de turnos e do timeout.
+- Demonstração dos três estados do relatório: revisão aprovada, achado crítico e revisão inconclusiva com causa nomeada.
+- Registro de `permission_denials_count` igual a zero no canário de ponta a ponta, comprovando coerência entre prompt e ferramentas permitidas.
+- Quando houver repetição automática: registro do limite de tentativas, da classificação de transitoriedade, e de que o esgotamento manteve o bloqueio.
+- Referência à execução do PR #6 como linha de base do problema: `subtype: error_max_turns`, `num_turns: 11`, `permission_denials_count: 3`, ausência de `structured_output`, veredito fail-closed não executado.
 - Saída do lint estático de workflows: permissões por job, ausência de segredo nos jobs de candidato, fixação de `uses:` por SHA, e ausência de checkout ou execução do head no workflow de revisão.
 - Evidência humana da proteção da `main`, com nome exato e origem esperada do check, anexada antes do merge.
 - Saída de `npm run quality:governance` sem nenhuma referência fixa a `004`.
