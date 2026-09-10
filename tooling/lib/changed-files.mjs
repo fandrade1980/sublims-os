@@ -24,11 +24,23 @@ function assertPath(path) {
   if (path.includes("\\")) {
     throw new Error(`caminho com barra invertida não é portável: ${path}`);
   }
-  if (path.startsWith("/") || /^[A-Za-z]:\//.test(path)) {
+  // `C:/x` é absoluto e `C:x` é relativo à unidade. Ambos descartam a raiz em `resolve`.
+  if (path.startsWith("/") || /^[A-Za-z]:/.test(path)) {
     throw new Error(`caminho absoluto não é aceito: ${path}`);
   }
-  if (path.split("/").includes("..")) {
+  if (path.endsWith("/")) {
+    throw new Error(`caminho com barra final é ambíguo: ${path}`);
+  }
+  const components = path.split("/");
+  if (components.includes("..")) {
     throw new Error(`caminho com componente \`..\` não é aceito: ${path}`);
+  }
+  // Grafias ambíguas do mesmo caminho quebrariam comparações textuais de prefixo.
+  if (components.includes("")) {
+    throw new Error(`caminho com componente vazio é ambíguo: ${path}`);
+  }
+  if (components.includes(".")) {
+    throw new Error(`caminho com componente \`.\` é ambíguo: ${path}`);
   }
 }
 

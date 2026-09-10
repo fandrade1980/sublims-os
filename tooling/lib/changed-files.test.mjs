@@ -110,6 +110,16 @@ test("rejeita caminho vazio, absoluto, com .. ou com barra invertida", () => {
   assert.throws(() => parseChangedFiles(fields("A", "docs\\nota.md")), /barra invertida/);
 });
 
+test("rejeita caminho relativo a unidade e grafias ambíguas do mesmo caminho", () => {
+  // `C:x` não é absoluto pela grafia, mas `resolve` descarta a raiz do mesmo jeito.
+  assert.throws(() => parseChangedFiles(fields("A", "C:orchestration/plans/3.json")), /caminho absoluto/);
+  assert.throws(() => parseChangedFiles(fields("A", "c:plans/3.json")), /caminho absoluto/);
+  assert.throws(() => parseChangedFiles(fields("A", "./AGENTS.md")), /componente `\.`/);
+  assert.throws(() => parseChangedFiles(fields("A", "docs/./nota.md")), /componente `\.`/);
+  assert.throws(() => parseChangedFiles(fields("A", "docs//nota.md")), /componente vazio/);
+  assert.throws(() => parseChangedFiles(fields("A", "orchestration/plans/")), /barra final/);
+});
+
 test("representa renomeação como exclusão mais adição, nunca como R", () => {
   const entries = parseChangedFiles(
     fields("D", "orchestration/plans/3.json", "A", "orchestration/plans/4.json")
