@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": "24.21.0"
   },
   "scripts": {
     "test:governance": "node --test --test-concurrency=1 tooling/**/*.test.mjs",

@@ -59,6 +59,9 @@ Se código e documentação divergirem, não escolha silenciosamente. Registre a
 
 - Nunca registrar senhas, tokens, dados pessoais completos ou segredos em prompts e logs.
 - Nunca ler ou editar arquivos de ambiente sem autorização explícita.
+- Preparar alterações sempre com caminhos explícitos: `git add -- <caminho>`. São proibidos `git add -A`, `git add .`, `git add` com padrão glob e `git commit -a`, para qualquer agente ou script.
+- `.gitignore` não substitui a inspeção do índice e pode ser contornado por `git add -f`.
+- Conferir `git diff --cached --name-only` antes de cada commit e interromper se aparecer qualquer caminho não previsto na tarefa.
 - Nunca executar migration destrutiva sem backup validado e aprovação humana.
 - Aplicar isolamento por organização em todas as consultas e mutações.
 - RLS é defesa adicional; autorização e pertencimento à Organização também devem ser validados no servidor.
