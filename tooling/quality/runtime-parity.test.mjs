@@ -24,8 +24,26 @@ function usesNodeRuntime(body) {
     .some((line) => line.trim() !== "" && COMMAND_POSITION.test(line));
 }
 
+function workflowPath(environment = process.env, cwd = process.cwd()) {
+  const candidatePath = "candidate/.github/workflows/pr-gates.yml";
+  if (environment.CI === "true") {
+    assert.ok(
+      environment.RUNTIME_PARITY_WORKFLOW,
+      "CI precisa informar RUNTIME_PARITY_WORKFLOW para validar o workflow candidato"
+    );
+    assert.equal(
+      environment.RUNTIME_PARITY_WORKFLOW,
+      candidatePath,
+      `RUNTIME_PARITY_WORKFLOW precisa ser ${candidatePath} em CI`
+    );
+    return resolve(cwd, candidatePath);
+  }
+  if (environment.RUNTIME_PARITY_WORKFLOW) return resolve(cwd, environment.RUNTIME_PARITY_WORKFLOW);
+  return workflowFile;
+}
+
 function readWorkflow() {
-  return readFileSync(workflowFile, "utf8");
+  return readFileSync(workflowPath(), "utf8");
 }
 
 function indentOf(line) {
@@ -52,19 +70,31 @@ function keyLine(line, first) {
 
 function jobBlocks(text) {
   const lines = text.split(/\r?\n/);
-  const start = lines.findIndex((line) => /^jobs:\s*$/.test(line));
+  const start = lines.findIndex((line) => /^\s*jobs:\s*$/.test(line));
   assert.ok(start >= 0, "o workflow precisa declarar jobs");
+  const jobsIndent = indentOf(lines[start]);
   const result = [];
   let current = null;
+  let jobIndent = null;
   for (let index = start + 1; index < lines.length; index += 1) {
-    const header = lines[index].match(/^ {2}([A-Za-z0-9_-]+):\s*$/);
-    if (header) {
+    const line = lines[index];
+    if (!line.trim() || /^\s*#/.test(line)) continue;
+    const indent = indentOf(line);
+    if (indent <= jobsIndent) break;
+    if (jobIndent === null) jobIndent = indent;
+    if (indent < jobIndent) {
+      assert.fail(`estrutura de jobs não enumerável na linha ${index + 1}`);
+    }
+    if (indent === jobIndent) {
+      const header = line.match(/^\s*([A-Za-z0-9_-]+):\s*$/);
+      assert.ok(header, `job inválido ou não enumerável na linha ${index + 1}`);
       current = { name: header[1], lines: [] };
       result.push(current);
       continue;
     }
-    if (current) current.lines.push(lines[index]);
+    if (current) current.lines.push(line);
   }
+  assert.ok(result.length > 0, "o workflow precisa declarar ao menos um job");
   return result;
 }
 
@@ -151,6 +181,10 @@ function runBody(step) {
   return "";
 }
 
+function hasRunStep(step) {
+  return step.lines.some((_, position) => topLevelKey(step, position, "run") !== null);
+}
+
 function analyzeWorkflowJobs(text = readWorkflow()) {
   return jobBlocks(text).map((job) => {
     const jobSteps = steps(job.lines);
@@ -172,13 +206,22 @@ function analyzeWorkflowJobs(text = readWorkflow()) {
       });
     return {
       name: job.name,
+      actions: jobSteps
+        .map((step) => ({ index: step.index, uses: stepUses(step) }))
+        .filter((action) => action.uses),
       checkouts,
       base: checkouts.filter((checkout) => checkout.ref === BASE_SHA_REF),
       candidate: checkouts.filter((checkout) => checkout.ref === HEAD_SHA_REF),
       setupNodes,
+      runs: jobSteps.filter(hasRunStep).map((step) => step.index),
       runtime: jobSteps.filter((step) => usesNodeRuntime(runBody(step))).map((step) => step.index)
     };
   });
+}
+
+function setupViolations(job) {
+  if (job.runs.length === 0 || job.setupNodes.length > 0) return [];
+  return [`job ${job.name}: possui passo run, mas não declara setup-node confiável`];
 }
 
 // O checkout correspondente é aquele cujo `path` produz exatamente o
@@ -191,10 +234,40 @@ function matchingBaseCheckout(job, setupNode) {
   );
 }
 
+function checkoutCanOverwrite(checkout, versionFile) {
+  if (!checkout.path) return true;
+  const prefix = `${checkout.path.replace(/\/$/, "")}/`;
+  return versionFile.startsWith(prefix);
+}
+
+function provenanceViolations(job) {
+  const problems = [];
+  for (const setupNode of job.setupNodes) {
+    const baseCheckout = matchingBaseCheckout(job, setupNode);
+    if (!baseCheckout || !setupNode.versionFile) continue;
+    for (const checkout of job.checkouts) {
+      if (checkout.index <= baseCheckout.index || checkout.index >= setupNode.index) continue;
+      if (checkout.ref === BASE_SHA_REF) continue;
+      if (!checkoutCanOverwrite(checkout, setupNode.versionFile)) continue;
+      problems.push(
+        `job ${job.name}: checkout não fixado em base.sha no passo ${checkout.index} pode sobrescrever ${setupNode.versionFile} antes do setup-node`
+      );
+    }
+    for (const action of job.actions) {
+      if (action.index <= baseCheckout.index || action.index >= setupNode.index) continue;
+      if (/actions\/checkout@/.test(action.uses)) continue;
+      problems.push(
+        `job ${job.name}: action ${action.uses} no passo ${action.index} pode alterar ${setupNode.versionFile} antes do setup-node`
+      );
+    }
+  }
+  return problems;
+}
+
 function orderViolations(job) {
   const problems = [];
-  if (job.runtime.length === 0) return problems;
-  const firstRuntime = Math.min(...job.runtime);
+  if (job.runs.length === 0) return problems;
+  const firstRuntime = Math.min(...job.runs);
   for (const setupNode of job.setupNodes) {
     const checkout = matchingBaseCheckout(job, setupNode);
     if (!checkout) {
@@ -210,7 +283,7 @@ function orderViolations(job) {
     }
     if (setupNode.index >= firstRuntime) {
       problems.push(
-        `job ${job.name}: setup-node no passo ${setupNode.index} precisa vir antes do primeiro comando de runtime no passo ${firstRuntime}`
+        `job ${job.name}: setup-node no passo ${setupNode.index} precisa vir antes do primeiro passo run no passo ${firstRuntime}`
       );
     }
   }
@@ -219,6 +292,17 @@ function orderViolations(job) {
 
 const CHECKOUT_SHA = "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803";
 const SETUP_NODE_SHA = "actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38";
+const EXPECTED_JOBS = ["claude-review", "governance", "quality"];
+
+function jobSetViolations(jobs) {
+  const observed = jobs.map((job) => job.name).sort();
+  if (observed.length === EXPECTED_JOBS.length && observed.every((name, index) => name === EXPECTED_JOBS[index])) {
+    return [];
+  }
+  return [
+    `jobs esperados: ${EXPECTED_JOBS.join(", ")}; observados: ${observed.join(", ") || "nenhum"}`
+  ];
+}
 
 test("`.nvmrc` e `engines.node` declaram exatamente a mesma versão", () => {
   const nvmrc = readFileSync(resolve(projectRoot, ".nvmrc"), "utf8").trim();
@@ -242,9 +326,10 @@ test("o workflow não fixa versão de Node literal em nenhum job", () => {
   );
 });
 
-test("todo job que executa o runtime declara setup-node com node-version-file", () => {
+test("todo job com passo run declara setup-node com node-version-file", () => {
   for (const job of analyzeWorkflowJobs()) {
-    if (job.runtime.length === 0) continue;
+    assert.deepEqual(setupViolations(job), [], `setup-node ausente no job ${job.name}`);
+    if (job.runs.length === 0) continue;
     assert.ok(
       job.setupNodes.length > 0,
       `job ${job.name} executa node, npm, npx ou corepack sem passo setup-node; a versão viria do runner`
@@ -277,6 +362,16 @@ test("node-version-file nunca vem de diretório controlado pelo candidato", () =
         `job ${job.name}: node-version-file ${setupNode.versionFile} usa diretório reservado ao candidato`
       );
     }
+  }
+});
+
+test("o workflow enumera exatamente os jobs de governança esperados", () => {
+  assert.deepEqual(jobSetViolations(analyzeWorkflowJobs()), []);
+});
+
+test("nenhum checkout intermediário pode substituir a origem confiável do node-version-file", () => {
+  for (const job of analyzeWorkflowJobs()) {
+    assert.deepEqual(provenanceViolations(job), [], `proveniência inválida no job ${job.name}`);
   }
 });
 
@@ -389,4 +484,152 @@ test("evidência negativa: run: aninhado não conta como comando de runtime", ()
 `);
   assert.deepEqual(job.runtime, [], "chave run: aninhada não pode ser lida como comando do passo");
   assert.deepEqual(orderViolations(job), [], "sem runtime, não há ordem a exigir");
+});
+
+test("enumeração vazia de jobs reprova explicitamente", () => {
+  assert.throws(
+    () => analyzeWorkflowJobs("jobs:\n"),
+    /o workflow precisa declarar ao menos um job/,
+    "ausência de jobs não pode equivaler a aprovação"
+  );
+});
+
+test("jobs com indentação YAML válida diferente continuam sendo enumerados", () => {
+  const jobs = analyzeWorkflowJobs(`jobs:
+    indented-job:
+        steps:
+            - run: echo sem runtime
+`);
+  assert.deepEqual(jobs.map((job) => job.name), ["indented-job"]);
+});
+
+test("qualquer passo run exige setup-node, inclusive invocação indireta", () => {
+  const [job] = analyzeWorkflowJobs(`jobs:
+  indirect-runtime:
+    steps:
+      - run: env NODE_OPTIONS=--no-warnings node script.mjs
+`);
+  assert.deepEqual(setupViolations(job), [
+    "job indirect-runtime: possui passo run, mas não declara setup-node confiável"
+  ]);
+});
+
+test("nenhum passo run pode sobrescrever a nvmrc confiável antes do setup-node", () => {
+  const [job] = analyzeWorkflowJobs(`jobs:
+  runtime-file-overwrite:
+    steps:
+      - uses: ${CHECKOUT_SHA}
+        with:
+          ref: ${BASE_SHA_REF}
+          path: trusted
+      - uses: ${CHECKOUT_SHA}
+        with:
+          ref: ${HEAD_SHA_REF}
+          path: candidate
+      - run: cp candidate/.nvmrc trusted/.nvmrc
+      - uses: ${SETUP_NODE_SHA}
+        with:
+          node-version-file: trusted/.nvmrc
+      - run: node trusted/tooling/governance/validate-pr.mjs
+`);
+  assert.deepEqual(orderViolations(job), [
+    "job runtime-file-overwrite: setup-node no passo 3 precisa vir antes do primeiro passo run no passo 2"
+  ]);
+});
+
+test("CI reprova quando o caminho do workflow candidato não é informado", () => {
+  assert.throws(
+    () => workflowPath({ CI: "true" }, projectRoot),
+    /CI precisa informar RUNTIME_PARITY_WORKFLOW/,
+    "o teste confiável não pode validar o próprio workflow por omissão"
+  );
+});
+
+test("CI rejeita caminho que aponta para o workflow confiável em vez do candidato", () => {
+  assert.throws(
+    () =>
+      workflowPath(
+        { CI: "true", RUNTIME_PARITY_WORKFLOW: "trusted/.github/workflows/pr-gates.yml" },
+        projectRoot
+      ),
+    /RUNTIME_PARITY_WORKFLOW precisa ser candidate\/\.github\/workflows\/pr-gates\.yml/
+  );
+});
+
+test("o job de qualidade seleciona explicitamente o workflow candidato", () => {
+  const candidatePath = "candidate/.github/workflows/pr-gates.yml";
+  assert.equal(
+    workflowPath({ CI: "true", RUNTIME_PARITY_WORKFLOW: candidatePath }, projectRoot),
+    resolve(projectRoot, candidatePath)
+  );
+  assert.match(
+    readWorkflow(),
+    /^\s+RUNTIME_PARITY_WORKFLOW:\s+candidate\/\.github\/workflows\/pr-gates\.yml\s*$/m,
+    "o teste confiável precisa receber o caminho do workflow candidato"
+  );
+});
+
+test("dependências candidatas são instaladas sem scripts de ciclo de vida", () => {
+  const installCommands = readWorkflow()
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => /^run:\s+npm ci(?:\s|$)/.test(line));
+  assert.deepEqual(installCommands, ["run: npm ci --ignore-scripts"]);
+});
+
+test("checkout não confiável não pode sobrescrever a origem da nvmrc antes do setup-node", () => {
+  const [job] = analyzeWorkflowJobs(`jobs:
+  checkout-overwrite:
+    steps:
+      - uses: ${CHECKOUT_SHA}
+        with:
+          ref: ${BASE_SHA_REF}
+          path: trusted
+      - uses: ${CHECKOUT_SHA}
+        with:
+          path: trusted
+      - uses: ${SETUP_NODE_SHA}
+        with:
+          node-version-file: trusted/.nvmrc
+      - run: node trusted/tooling/governance/validate-pr.mjs
+`);
+  assert.deepEqual(provenanceViolations(job), [
+    "job checkout-overwrite: checkout não fixado em base.sha no passo 1 pode sobrescrever trusted/.nvmrc antes do setup-node"
+  ]);
+});
+
+test("action executável não pode rodar entre o checkout confiável e o setup-node", () => {
+  const [job] = analyzeWorkflowJobs(`jobs:
+  action-overwrite:
+    steps:
+      - uses: ${CHECKOUT_SHA}
+        with:
+          ref: ${BASE_SHA_REF}
+          path: trusted
+      - uses: ./candidate/overwrite-runtime
+      - uses: ${SETUP_NODE_SHA}
+        with:
+          node-version-file: trusted/.nvmrc
+      - run: node trusted/tooling/governance/validate-pr.mjs
+`);
+  assert.deepEqual(provenanceViolations(job), [
+    "job action-overwrite: action ./candidate/overwrite-runtime no passo 1 pode alterar trusted/.nvmrc antes do setup-node"
+  ]);
+});
+
+test("conjunto parcial de jobs reprova em vez de validar parcialmente", () => {
+  const jobs = analyzeWorkflowJobs(`jobs:
+  governance:
+    steps:
+      - uses: ${CHECKOUT_SHA}
+        with:
+          ref: ${BASE_SHA_REF}
+      - uses: ${SETUP_NODE_SHA}
+        with:
+          node-version-file: .nvmrc
+      - run: node trusted/tooling/governance/validate-pr.mjs
+`);
+  assert.deepEqual(jobSetViolations(jobs), [
+    "jobs esperados: claude-review, governance, quality; observados: governance"
+  ]);
 });

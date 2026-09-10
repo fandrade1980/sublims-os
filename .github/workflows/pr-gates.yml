@@ -78,8 +78,10 @@ jobs:
           cache-dependency-path: candidate/package-lock.json
       - name: Install locked dependencies
         working-directory: candidate
-        run: npm ci
+        run: npm ci --ignore-scripts
       - name: Validate trusted governance baseline
+        env:
+          RUNTIME_PARITY_WORKFLOW: candidate/.github/workflows/pr-gates.yml
         run: |
           node --test --test-concurrency=1 trusted/tooling/**/*.test.mjs
           node trusted/tooling/context/validate-context-graph.mjs trusted/context/graph.json
