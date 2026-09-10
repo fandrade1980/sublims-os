@@ -32,6 +32,10 @@ jobs:
           path: candidate
           fetch-depth: 0
           persist-credentials: false
+      - name: Use Node.js from the protected base
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6 verified 2026-09-08
+        with:
+          node-version-file: trusted/.nvmrc
       - name: Prepare untrusted PR metadata as data
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
@@ -69,7 +73,7 @@ jobs:
       - name: Use Node.js
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6 verified 2026-09-08
         with:
-          node-version: 24
+          node-version-file: trusted/.nvmrc
           cache: npm
           cache-dependency-path: candidate/package-lock.json
       - name: Install locked dependencies
@@ -109,6 +113,10 @@ jobs:
           path: pr-head
           fetch-depth: 0
           persist-credentials: false
+      - name: Use Node.js from the protected base
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6 verified 2026-09-08
+        with:
+          node-version-file: .nvmrc
       - name: Build review input without executing candidate code
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
