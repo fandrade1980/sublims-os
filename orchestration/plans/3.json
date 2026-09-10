@@ -1,0 +1,310 @@
+{
+  "version": 1,
+  "task": "spec:3",
+  "steps": [
+    {
+      "id": "pr1-governance-metadata",
+      "agent": "orchestrator",
+      "mode": "write",
+      "dependsOn": [],
+      "reads": ["AGENTS.md", "specs/3-governance-hardening.md", "context/graph.json"],
+      "writes": ["orchestration/plans/3.json", "context/graph.json"]
+    },
+    {
+      "id": "pr1-runtime-and-hygiene",
+      "agent": "platform-devops",
+      "mode": "write",
+      "dependsOn": ["pr1-governance-metadata"],
+      "reads": ["specs/3-governance-hardening.md", "package.json", ".gitignore", "AGENTS.md"],
+      "writes": [".nvmrc", "package.json", ".gitignore", "AGENTS.md"]
+    },
+    {
+      "id": "pr1-deterministic-gates",
+      "agent": "reviewer",
+      "mode": "read",
+      "dependsOn": ["pr1-runtime-and-hygiene"],
+      "reads": ["tooling/**", "context/graph.json", "orchestration/plans/3.json", "package.json", ".nvmrc"],
+      "writes": []
+    },
+    {
+      "id": "pr1-review",
+      "agent": "reviewer",
+      "mode": "read",
+      "dependsOn": ["pr1-deterministic-gates"],
+      "reads": [".nvmrc", "package.json", ".gitignore", "AGENTS.md", "orchestration/plans/3.json", "context/graph.json"],
+      "writes": []
+    },
+    {
+      "id": "pr1-security-review",
+      "agent": "security-data-reviewer",
+      "mode": "read",
+      "dependsOn": ["pr1-deterministic-gates"],
+      "reads": [".gitignore", "AGENTS.md", "package.json", ".nvmrc"],
+      "writes": []
+    },
+
+    {
+      "id": "pr2-ci-bootstrap",
+      "agent": "platform-devops",
+      "mode": "write",
+      "dependsOn": ["pr1-review", "pr1-security-review"],
+      "reads": ["specs/3-governance-hardening.md", ".nvmrc", "package.json", ".github/workflows/pr-gates.yml"],
+      "writes": [".github/workflows/pr-gates.yml", "tooling/quality/runtime-parity.test.mjs"]
+    },
+    {
+      "id": "pr2-deterministic-gates",
+      "agent": "reviewer",
+      "mode": "read",
+      "dependsOn": ["pr2-ci-bootstrap"],
+      "reads": ["tooling/quality/runtime-parity.test.mjs", "tooling/**", ".nvmrc", "package.json"],
+      "writes": []
+    },
+    {
+      "id": "pr2-review",
+      "agent": "reviewer",
+      "mode": "read",
+      "dependsOn": ["pr2-deterministic-gates"],
+      "reads": [".github/workflows/pr-gates.yml", "tooling/quality/runtime-parity.test.mjs"],
+      "writes": []
+    },
+    {
+      "id": "pr2-security-review",
+      "agent": "security-data-reviewer",
+      "mode": "read",
+      "dependsOn": ["pr2-deterministic-gates"],
+      "reads": [".github/workflows/pr-gates.yml"],
+      "writes": []
+    },
+
+    {
+      "id": "pr3-changed-files-and-snapshots",
+      "agent": "developer",
+      "mode": "write",
+      "dependsOn": ["pr2-review", "pr2-security-review"],
+      "reads": ["specs/3-governance-hardening.md", "tooling/**"],
+      "writes": [
+        "tooling/lib/changed-files.mjs",
+        "tooling/lib/changed-files.test.mjs",
+        "tooling/lib/snapshot.mjs",
+        "tooling/lib/snapshot.test.mjs"
+      ]
+    },
+    {
+      "id": "pr3-deterministic-gates",
+      "agent": "reviewer",
+      "mode": "read",
+      "dependsOn": ["pr3-changed-files-and-snapshots"],
+      "reads": ["tooling/lib/**", "tooling/**"],
+      "writes": []
+    },
+    {
+      "id": "pr3-review",
+      "agent": "reviewer",
+      "mode": "read",
+      "dependsOn": ["pr3-deterministic-gates"],
+      "reads": ["tooling/lib/**"],
+      "writes": []
+    },
+    {
+      "id": "pr3-security-review",
+      "agent": "security-data-reviewer",
+      "mode": "read",
+      "dependsOn": ["pr3-deterministic-gates"],
+      "reads": ["tooling/lib/**"],
+      "writes": []
+    },
+
+    {
+      "id": "pr4-plan-and-spec-enumeration",
+      "agent": "developer",
+      "mode": "write",
+      "dependsOn": ["pr3-review", "pr3-security-review"],
+      "reads": ["specs/3-governance-hardening.md", "tooling/**", "orchestration/plans/**", "specs/**"],
+      "writes": [
+        "tooling/orchestration/validate-execution-plan.mjs",
+        "tooling/orchestration/execution-plan.test.mjs",
+        "tooling/governance/validate-spec.mjs",
+        "tooling/governance/spec-cli.test.mjs",
+        "package.json"
+      ]
+    },
+    {
+      "id": "pr4-deterministic-gates",
+      "agent": "reviewer",
+      "mode": "read",
+      "dependsOn": ["pr4-plan-and-spec-enumeration"],
+      "reads": ["tooling/**", "orchestration/plans/**", "specs/**", "package.json"],
+      "writes": []
+    },
+    {
+      "id": "pr4-review",
+      "agent": "reviewer",
+      "mode": "read",
+      "dependsOn": ["pr4-deterministic-gates"],
+      "reads": ["tooling/orchestration/**", "tooling/governance/**", "package.json"],
+      "writes": []
+    },
+    {
+      "id": "pr4-security-review",
+      "agent": "security-data-reviewer",
+      "mode": "read",
+      "dependsOn": ["pr4-deterministic-gates"],
+      "reads": ["tooling/orchestration/**", "tooling/governance/**"],
+      "writes": []
+    },
+
+    {
+      "id": "pr5-policy-and-lockfile",
+      "agent": "developer",
+      "mode": "write",
+      "dependsOn": ["pr4-review", "pr4-security-review"],
+      "reads": ["specs/3-governance-hardening.md", "tooling/**", "quality/**"],
+      "writes": [
+        "tooling/toolchain/package.json",
+        "tooling/toolchain/package-lock.json",
+        "tooling/quality/compare-policy.mjs",
+        "tooling/quality/compare-policy.test.mjs",
+        "tooling/quality/validate-candidate-config.mjs",
+        "tooling/quality/validate-candidate-config.test.mjs",
+        "tooling/quality/validate-lockfile.mjs",
+        "tooling/quality/validate-lockfile.test.mjs",
+        "tooling/governance/validate-pr.mjs",
+        "tooling/governance/pr-cli.test.mjs",
+        "quality/policy.json",
+        "quality/policy-exceptions.json"
+      ]
+    },
+    {
+      "id": "pr5-deterministic-gates",
+      "agent": "reviewer",
+      "mode": "read",
+      "dependsOn": ["pr5-policy-and-lockfile"],
+      "reads": ["tooling/**", "quality/**"],
+      "writes": []
+    },
+    {
+      "id": "pr5-review",
+      "agent": "reviewer",
+      "mode": "read",
+      "dependsOn": ["pr5-deterministic-gates"],
+      "reads": ["tooling/toolchain/**", "tooling/quality/**", "tooling/governance/**", "quality/**"],
+      "writes": []
+    },
+    {
+      "id": "pr5-security-review",
+      "agent": "security-data-reviewer",
+      "mode": "read",
+      "dependsOn": ["pr5-deterministic-gates"],
+      "reads": ["tooling/toolchain/**", "tooling/quality/**", "tooling/governance/**", "quality/**"],
+      "writes": []
+    },
+
+    {
+      "id": "pr6-review-workflow-and-publisher",
+      "agent": "platform-devops",
+      "mode": "write",
+      "dependsOn": ["pr5-review", "pr5-security-review"],
+      "reads": ["specs/3-governance-hardening.md", ".github/workflows/**", "tooling/quality/**"],
+      "writes": [
+        ".github/workflows/pr-review.yml",
+        ".github/workflows/pr-gates.yml",
+        "tooling/quality/materialize-diff.mjs",
+        "tooling/quality/materialize-diff.test.mjs",
+        "tooling/quality/enforce-claude-review.mjs",
+        "tooling/quality/enforce-claude-review.test.mjs",
+        "tooling/quality/publish-review-check.mjs",
+        "tooling/quality/publish-review-check.test.mjs",
+        "tooling/quality/lint-workflows.mjs",
+        "tooling/quality/lint-workflows.test.mjs",
+        "docs/architecture.md",
+        "templates/spec.md"
+      ]
+    },
+    {
+      "id": "pr6-deterministic-gates-three-outcome-states",
+      "agent": "reviewer",
+      "mode": "read",
+      "dependsOn": ["pr6-review-workflow-and-publisher"],
+      "reads": [
+        "tooling/quality/enforce-claude-review.test.mjs",
+        "tooling/quality/publish-review-check.test.mjs",
+        "tooling/quality/materialize-diff.test.mjs",
+        "tooling/quality/lint-workflows.test.mjs"
+      ],
+      "writes": []
+    },
+    {
+      "id": "pr6-review",
+      "agent": "reviewer",
+      "mode": "read",
+      "dependsOn": ["pr6-deterministic-gates-three-outcome-states"],
+      "reads": [".github/workflows/**", "tooling/quality/**", "docs/architecture.md", "templates/spec.md"],
+      "writes": []
+    },
+    {
+      "id": "pr6-security-review",
+      "agent": "security-data-reviewer",
+      "mode": "read",
+      "dependsOn": ["pr6-deterministic-gates-three-outcome-states"],
+      "reads": [".github/workflows/**", "tooling/quality/**"],
+      "writes": []
+    },
+
+    {
+      "id": "probe-trusted-execution-evidence-verification",
+      "agent": "reviewer",
+      "mode": "read",
+      "dependsOn": ["pr6-review", "pr6-security-review"],
+      "reads": [".github/workflows/pr-review.yml", "tooling/quality/enforce-claude-review.mjs", "tooling/quality/materialize-diff.mjs", "quality/policy.json"],
+      "writes": []
+    },
+    {
+      "id": "required-check-blocking-verification",
+      "agent": "security-data-reviewer",
+      "mode": "read",
+      "dependsOn": ["probe-trusted-execution-evidence-verification"],
+      "reads": [".github/workflows/pr-review.yml", "tooling/quality/publish-review-check.mjs"],
+      "writes": []
+    },
+
+    {
+      "id": "pr7-activation-and-canaries",
+      "agent": "developer",
+      "mode": "write",
+      "dependsOn": ["required-check-blocking-verification"],
+      "reads": ["specs/3-governance-hardening.md", "tooling/**", "quality/**"],
+      "writes": [
+        "quality/application-gates.json",
+        "tooling/quality/run-trusted-application-gates.mjs",
+        "tooling/quality/trusted-application-gates.test.mjs",
+        "tooling/quality/canary/**",
+        "tooling/quality/e2e-bootstrap.mjs",
+        "tooling/quality/e2e-bootstrap.test.mjs"
+      ]
+    },
+    {
+      "id": "pr7-deterministic-gates",
+      "agent": "reviewer",
+      "mode": "read",
+      "dependsOn": ["pr7-activation-and-canaries"],
+      "reads": ["tooling/**", "quality/**"],
+      "writes": []
+    },
+    {
+      "id": "pr7-review",
+      "agent": "reviewer",
+      "mode": "read",
+      "dependsOn": ["pr7-deterministic-gates"],
+      "reads": ["**"],
+      "writes": []
+    },
+    {
+      "id": "pr7-security-review",
+      "agent": "security-data-reviewer",
+      "mode": "read",
+      "dependsOn": ["pr7-deterministic-gates"],
+      "reads": ["quality/**", "tooling/**", ".github/**"],
+      "writes": []
+    }
+  ]
+}

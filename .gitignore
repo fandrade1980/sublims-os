@@ -9,3 +9,44 @@ dist/
 .review-input/
 pr-head/
 
+# Documento de trabalho local da raiz, nome literal e ancorado.
+# Evita inclusao acidental; nao impede inclusao deliberada com `git add -f`.
+/Prompt avançado — Engenharia reversa autorizada de plataforma SaaS.md
+
+# Chaves, certificados e material criptografico
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+
+# Credenciais de ferramenta
+.npmrc
+.yarnrc
+.pgpass
+.claude/settings.local.json
+
+# Dumps, bancos locais e backups
+*.dump
+*.sql.gz
+*.sqlite
+*.sqlite3
+backups/
+dumps/
+secrets/
+*.secret.*
+
+# Sobreposicoes locais de container
+docker-compose.override.yml
+docker-compose.override.yaml
+
+# Artefatos de build e cache
+.turbo/
+.vercel/
+*.tsbuildinfo
+
+# Arquivos de sistema operacional
+.DS_Store
+Thumbs.db
