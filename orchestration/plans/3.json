@@ -264,7 +264,10 @@
         "tooling/quality/**",
         "tooling/toolchain/**",
         "tooling/governance/**",
-        "quality/**"
+        "tooling/lib/**",
+        "quality/**",
+        "docs/architecture.md",
+        "templates/spec.md"
       ],
       "writes": [
         ".github/workflows/pr-review.yml",
@@ -290,7 +293,8 @@
         "tooling/quality/enforce-claude-review.test.mjs",
         "tooling/quality/publish-review-check.test.mjs",
         "tooling/quality/materialize-diff.test.mjs",
-        "tooling/quality/lint-workflows.test.mjs"
+        "tooling/quality/lint-workflows.test.mjs",
+        "tooling/quality/**"
       ],
       "writes": []
     },
@@ -300,12 +304,14 @@
       "mode": "read",
       "dependsOn": ["pr6-deterministic-gates-three-outcome-states"],
       "reads": [
+        "specs/3-governance-hardening.md",
         ".github/workflows/**",
         "tooling/quality/**",
         "docs/architecture.md",
         "templates/spec.md",
         "tooling/toolchain/**",
         "tooling/governance/**",
+        "tooling/lib/**",
         "quality/**"
       ],
       "writes": []
@@ -316,10 +322,12 @@
       "mode": "read",
       "dependsOn": ["pr6-deterministic-gates-three-outcome-states"],
       "reads": [
+        "specs/3-governance-hardening.md",
         ".github/workflows/**",
         "tooling/quality/**",
         "tooling/toolchain/**",
         "tooling/governance/**",
+        "tooling/lib/**",
         "quality/**"
       ],
       "writes": []
