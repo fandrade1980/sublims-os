@@ -162,6 +162,7 @@
         "specs/3-governance-hardening.md",
         "tooling/**",
         "quality/**",
+        ".nvmrc",
         "package.json",
         "package-lock.json",
         "docs/architecture.md",
@@ -181,6 +182,7 @@
         "tooling/quality/validate-lockfile.mjs",
         "tooling/quality/validate-lockfile.test.mjs",
         "tooling/governance/validate-spec.mjs",
+        "tooling/governance/spec-cli.test.mjs",
         "tooling/governance/validate-pr.mjs",
         "tooling/governance/pr-cli.test.mjs",
         "quality/policy.json",
@@ -195,7 +197,15 @@
       "agent": "reviewer",
       "mode": "read",
       "dependsOn": ["pr5-policy-and-lockfile"],
-      "reads": ["tooling/**", "quality/**"],
+      "reads": [
+        "tooling/**",
+        "quality/**",
+        ".nvmrc",
+        "package.json",
+        "package-lock.json",
+        "docs/architecture.md",
+        "docs/ai-engineering-system.md"
+      ],
       "writes": []
     },
     {
@@ -209,6 +219,8 @@
         "tooling/governance/**",
         "tooling/lib/**",
         "quality/**",
+        ".nvmrc",
+        "package.json",
         "package-lock.json",
         "docs/architecture.md",
         "docs/ai-engineering-system.md"
@@ -226,6 +238,8 @@
         "tooling/governance/**",
         "tooling/lib/**",
         "quality/**",
+        ".nvmrc",
+        "package.json",
         "package-lock.json",
         "docs/architecture.md",
         "docs/ai-engineering-system.md"
