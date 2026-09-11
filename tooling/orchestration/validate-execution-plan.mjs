@@ -142,7 +142,9 @@ function parseArguments(argv) {
       // faria o último vencer, e uma raiz confiável poderia ser trocada sem sinal.
       if (options.has(value)) throw new Error(`argumento repetido: ${value}`);
       const next = argv[index + 1];
-      if (next === undefined || next.startsWith("--")) {
+      // Valor vazio ou só com espaços degradaria o modo em silêncio: uma variável de
+      // ambiente não exportada expande para vazio e o gate aprovaria sem examinar nada.
+      if (next === undefined || next.startsWith("--") || next.trim() === "") {
         throw new Error(`${value} exige um valor`);
       }
       options.set(value, next);
@@ -170,9 +172,9 @@ function runSnapshotMode(trusted, candidate, changedFile) {
     allowEmpty: TRUSTED_RELAXATIONS.allowEmpty
   });
   const baseCount = validateSnapshot(base, "base");
-  if (!candidate) return `Planos válidos — base: ${baseCount} ${baseCount === 1 ? "plano" : "planos"}.`;
+  if (candidate === undefined) return `Planos válidos — base: ${baseCount} ${baseCount === 1 ? "plano" : "planos"}.`;
 
-  if (!changedFile) throw new Error("--changed é obrigatório quando --candidate é informado");
+  if (changedFile === undefined) throw new Error("--changed é obrigatório quando --candidate é informado");
   const effective = applyChanges({
     base,
     changes: readChangedEntries(changedFile),
@@ -201,13 +203,13 @@ try {
   const candidate = options.get("--candidate");
   const changedFile = options.get("--changed");
 
-  if (trusted) {
+  if (trusted !== undefined) {
     if (files.length) throw new Error("use modo por arquivo ou modo snapshot, nunca os dois");
     // Aceitar `--changed` sem `--candidate` ignoraria a lista de alterações e aprovaria
     // validando apenas a base: exclusão e adição do candidato passariam despercebidas.
-    if (changedFile && !candidate) throw new Error("--changed exige --candidate");
+    if (changedFile !== undefined && candidate === undefined) throw new Error("--changed exige --candidate");
     process.stdout.write(`${runSnapshotMode(trusted, candidate, changedFile)}\n`);
-  } else if (candidate || changedFile) {
+  } else if (candidate !== undefined || changedFile !== undefined) {
     throw new Error("--trusted é obrigatório no modo snapshot");
   } else {
     if (!files.length) throw new Error("informe o arquivo do plano ou use --trusted");

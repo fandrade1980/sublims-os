@@ -257,3 +257,91 @@ test("modo posicional exige `task`, como o modo snapshot", () => {
   assert.equal(result.status, 1, "plano sem `task` não pode passar no modo por arquivo");
   assert.match(result.stderr, /sem `task`/);
 });
+
+// --- cobertura das invariantes do DAG, recuperada da base 9d2dd09 ---
+// Os três casos originais foram perdidos quando este arquivo foi reescrito. Restaurados
+// aqui com `task`, que passou a ser obrigatório, e estendidos ao modo snapshot para
+// provar paridade entre os dois modos.
+
+const ANALISES_PARALELAS = {
+  version: 1,
+  task: "spec:3",
+  steps: [
+    { id: "product", agent: "product", mode: "read", dependsOn: [], reads: ["specs/**"], writes: [] },
+    { id: "security", agent: "security-data-reviewer", mode: "read", dependsOn: [], reads: ["**"], writes: [] },
+    { id: "consolidate", agent: "orchestrator", mode: "read", dependsOn: ["product", "security"], reads: ["**"], writes: [] },
+    { id: "implement", agent: "developer", mode: "write", dependsOn: ["consolidate"], reads: ["**"], writes: ["tooling/**"] }
+  ]
+};
+
+const ESCRITORES_PARALELOS = {
+  version: 1,
+  task: "spec:3",
+  steps: [
+    { id: "write-a", agent: "developer", mode: "write", dependsOn: [], reads: [], writes: ["src/a.ts"] },
+    { id: "write-b", agent: "platform-devops", mode: "write", dependsOn: [], reads: [], writes: ["infra/a.yml"] }
+  ]
+};
+
+const CICLO = {
+  version: 1,
+  task: "spec:3",
+  steps: [
+    { id: "a", agent: "product", mode: "read", dependsOn: ["b"], reads: [], writes: [] },
+    { id: "b", agent: "architect", mode: "read", dependsOn: ["a"], reads: [], writes: [] }
+  ]
+};
+
+function posicional(plano) {
+  const root = tree({ "orchestration/plans/3.json": JSON.stringify(plano) });
+  return run([join(root, "orchestration/plans/3.json")]);
+}
+
+function snapshot(plano) {
+  const root = tree({ "orchestration/plans/3.json": JSON.stringify(plano) });
+  return run(["--trusted", root]);
+}
+
+test("aceita análises paralelas seguidas por um único escritor", () => {
+  for (const [modo, resultado] of [["posicional", posicional(ANALISES_PARALELAS)], ["snapshot", snapshot(ANALISES_PARALELAS)]]) {
+    assert.equal(resultado.status, 0, `${modo}: ${resultado.stderr}`);
+  }
+});
+
+test("rejeita dois escritores que podem executar em paralelo, nos dois modos", () => {
+  for (const [modo, resultado] of [["posicional", posicional(ESCRITORES_PARALELOS)], ["snapshot", snapshot(ESCRITORES_PARALELOS)]]) {
+    assert.notEqual(resultado.status, 0, `${modo} deveria reprovar escritores concorrentes`);
+    assert.match(resultado.stderr, /escritores.*paralelo/i, `${modo}`);
+  }
+});
+
+test("rejeita ciclo no DAG de execução, nos dois modos", () => {
+  for (const [modo, resultado] of [["posicional", posicional(CICLO)], ["snapshot", snapshot(CICLO)]]) {
+    assert.notEqual(resultado.status, 0, `${modo} deveria reprovar ciclo`);
+    assert.match(resultado.stderr, /ciclo/i, `${modo}`);
+  }
+});
+
+test("valor vazio ou em branco é recusado em toda opção, com a opção identificada", () => {
+  const trusted = tree({ "orchestration/plans/3.json": plan("spec:3") });
+  const changed = changedFile([["M", "orchestration/plans/3.json"]]);
+  for (const vazio of ["", "   ", "\t"]) {
+    for (const [args, opcao] of [
+      [["--trusted", vazio], "--trusted"],
+      [["--trusted", trusted, "--candidate", vazio, "--changed", changed], "--candidate"],
+      [["--trusted", trusted, "--candidate", trusted, "--changed", vazio], "--changed"]
+    ]) {
+      const result = run(args);
+      assert.equal(result.status, 1, `${opcao} com ${JSON.stringify(vazio)} não pode ser aceito`);
+      assert.match(result.stderr, new RegExp(`${opcao} exige um valor`), opcao);
+    }
+  }
+});
+
+test("o modo é escolhido pela presença da opção, não pela veracidade do valor", () => {
+  const trusted = tree({ "orchestration/plans/3.json": plan("spec:3") });
+  // `--candidate ""` não pode degradar silenciosamente para validação só da base.
+  const result = run(["--trusted", trusted, "--candidate", ""]);
+  assert.equal(result.status, 1);
+  assert.doesNotMatch(result.stdout, /base: 1 plano/, "não pode reportar sucesso de base");
+});

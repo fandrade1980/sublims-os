@@ -108,6 +108,15 @@ function validateFile(file) {
   validateSpecContent(readFileSync(file, "utf8"), basename(file), projectRoot);
 }
 
+// Identidade canônica usada EXCLUSIVAMENTE para apurar unicidade. `3`, `03`, `003` e
+// `0003` designam a mesma issue e precisam colidir. A remoção dos zeros é textual: usar
+// `Number` ou `parseInt` perderia precisão em identificadores longos.
+// A comparação entre o prefixo do arquivo e `metadata.id` permanece estrita e textual,
+// para que ids legados como `004` continuem válidos enquanto o nome corresponder.
+function canonicalSpecId(id) {
+  return String(id).replace(/^0+(?=\d)/, "");
+}
+
 // Cada snapshot é verificado por inteiro e isoladamente. Unicidade nunca é apurada pela
 // união de base e candidato: alterar uma spec existente produziria duas entradas com o
 // mesmo `id` e a mudança legítima seria reprovada como duplicação.
@@ -129,7 +138,7 @@ function validateSnapshot(snapshot, root, label) {
     // Conteúdo do candidato é dado: `readEntryText`, jamais `import`.
     try {
       const metadata = validateSpecContent(readEntryText(entry), basename(relativePath), root);
-      identifiers.set(relativePath, String(metadata.id));
+      identifiers.set(relativePath, canonicalSpecId(metadata.id));
     } catch (error) {
       throw new Error(`${label}: ${relativePath}: ${error.message}`);
     }
@@ -156,7 +165,11 @@ function parseArguments(argv) {
       // faria o último vencer, e uma raiz confiável poderia ser trocada sem sinal.
       if (options.has(value)) throw new Error(`argumento repetido: ${value}`);
       const next = argv[index + 1];
-      if (next === undefined || next.startsWith("--")) throw new Error(`${value} exige um valor`);
+      // Valor vazio ou só com espaços degradaria o modo em silêncio: uma variável de
+      // ambiente não exportada expande para vazio e o gate aprovaria sem examinar nada.
+      if (next === undefined || next.startsWith("--") || next.trim() === "") {
+        throw new Error(`${value} exige um valor`);
+      }
       options.set(value, next);
       index += 1;
       continue;
@@ -178,9 +191,9 @@ function runSnapshotMode(trusted, candidate, changedFile) {
     allowEmpty: TRUSTED_RELAXATIONS.allowEmpty
   });
   const baseCount = validateSnapshot(base, trusted, "base");
-  if (!candidate) return `Especificações válidas — base: ${baseCount} ${plural(baseCount)}.`;
+  if (candidate === undefined) return `Especificações válidas — base: ${baseCount} ${plural(baseCount)}.`;
 
-  if (!changedFile) throw new Error("--changed é obrigatório quando --candidate é informado");
+  if (changedFile === undefined) throw new Error("--changed é obrigatório quando --candidate é informado");
   const effective = applyChanges({
     base,
     // Buffer, não texto: a separação por NUL acontece sobre os bytes. Lista vazia faria
@@ -207,13 +220,13 @@ try {
   const candidate = options.get("--candidate");
   const changedFile = options.get("--changed");
 
-  if (trusted) {
+  if (trusted !== undefined) {
     if (files.length) throw new Error("use modo por arquivo ou modo snapshot, nunca os dois");
     // Aceitar `--changed` sem `--candidate` ignoraria a lista de alterações e aprovaria
     // validando apenas a base: exclusão e adição do candidato passariam despercebidas.
-    if (changedFile && !candidate) throw new Error("--changed exige --candidate");
+    if (changedFile !== undefined && candidate === undefined) throw new Error("--changed exige --candidate");
     process.stdout.write(`${runSnapshotMode(trusted, candidate, changedFile)}\n`);
-  } else if (candidate || changedFile) {
+  } else if (candidate !== undefined || changedFile !== undefined) {
     throw new Error("--trusted é obrigatório no modo snapshot");
   } else {
     // Modo por arquivo preservado: `validate-pr.mjs` e o workflow ainda invocam assim.

@@ -351,3 +351,87 @@ test("spec herdada da base reprova se a tarefa referenciada não existir na árv
   assert.equal(result.status, 1, "a remoção da tarefa na árvore candidata precisa reprovar");
   assert.match(result.stderr, /issue local inexistente/);
 });
+
+test("valor vazio ou em branco é recusado em toda opção, com a opção identificada", () => {
+  const trusted = specTree({ "specs/3-governance-hardening.md": specWith("3", "github:#3") });
+  const changed = changedList([["M", "specs/3-governance-hardening.md"]]);
+  for (const vazio of ["", "   ", "\t"]) {
+    for (const [args, opcao] of [
+      [["--trusted", vazio], "--trusted"],
+      [["--trusted", trusted, "--candidate", vazio, "--changed", changed], "--candidate"],
+      [["--trusted", trusted, "--candidate", trusted, "--changed", vazio], "--changed"]
+    ]) {
+      const result = runCli(args);
+      assert.equal(result.status, 1, `${opcao} com ${JSON.stringify(vazio)} não pode ser aceito`);
+      assert.match(result.stderr, new RegExp(`${opcao} exige um valor`), opcao);
+    }
+  }
+});
+
+test("o modo é escolhido pela presença da opção, não pela veracidade do valor", () => {
+  const trusted = specTree({ "specs/3-governance-hardening.md": specWith("3", "github:#3") });
+  const result = runCli(["--trusted", trusted, "--candidate", ""]);
+  assert.equal(result.status, 1);
+  assert.doesNotMatch(result.stdout, /base: 1 especificação/, "não pode reportar sucesso de base");
+});
+
+test("ids que diferem só por zeros à esquerda reprovam como duplicata", () => {
+  // Cada spec é válida isoladamente: o metadado corresponde textualmente ao nome.
+  // Sem chave canônica, `3` e `003` passariam como identificadores distintos da mesma issue.
+  const trusted = specTree({
+    "specs/3-a.md": specWith("3", "github:#3"),
+    "specs/003-b.md": specWith("003", "github:#3")
+  });
+  const result = runCli(["--trusted", trusted]);
+  assert.equal(result.status, 1, "3 e 003 designam a mesma issue e não podem coexistir");
+  assert.match(result.stderr, /id duplicado/);
+});
+
+test("a chave canônica cobre qualquer quantidade de zeros à esquerda", () => {
+  for (const [a, b] of [["3", "03"], ["3", "0003"], ["03", "003"], ["10", "010"]]) {
+    const trusted = specTree({
+      [`specs/${a}-a.md`]: specWith(a, "github:#3"),
+      [`specs/${b}-b.md`]: specWith(b, "github:#3")
+    });
+    const result = runCli(["--trusted", trusted]);
+    assert.equal(result.status, 1, `${a} e ${b} deveriam colidir`);
+    assert.match(result.stderr, /id duplicado/, `${a} vs ${b}`);
+  }
+});
+
+test("ids canônicos distintos continuam aprovados", () => {
+  const trusted = specTree({
+    "specs/3-a.md": specWith("3", "github:#3"),
+    "specs/10-b.md": specWith("10", "github:#10"),
+    "specs/123-c.md": specWith("123", "github:#123")
+  });
+  const result = runCli(["--trusted", trusted]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /base: 3 especificações/);
+});
+
+test("a correspondência textual entre nome e metadata.id permanece estrita", () => {
+  // Compatibilidade: id legado com zeros à esquerda continua válido quando o nome combina.
+  const legado = specTree({ "specs/004-x.md": specWith("004", "github:#4") });
+  assert.equal(runCli(["--trusted", legado]).status, 0, "004 com id 004 precisa continuar válido");
+
+  // A canonização vale só para unicidade: nome e metadado não podem divergir textualmente.
+  const divergente = specTree({ "specs/004-x.md": specWith("4", "github:#4") });
+  const result = runCli(["--trusted", divergente]);
+  assert.equal(result.status, 1, "004 com id 4 continua inválido");
+  assert.match(result.stderr, /não corresponde ao nome do arquivo/);
+});
+
+test("a árvore confiável atual, com a spec 004, permanece válida", () => {
+  const raiz = resolve(import.meta.dirname, "../..");
+  const snapshot = runCli(["--trusted", raiz]);
+  assert.equal(snapshot.status, 0, snapshot.stderr);
+  assert.match(snapshot.stdout, /base: 2 especificações/);
+
+  const posicional = spawnSync(
+    process.execPath,
+    [cli, join(raiz, "specs/004-ai-engineering-system.md")],
+    { encoding: "utf8" }
+  );
+  assert.equal(posicional.status, 0, posicional.stderr);
+});
