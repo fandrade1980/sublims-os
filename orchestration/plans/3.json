@@ -204,7 +204,11 @@
         "package.json",
         "package-lock.json",
         "docs/architecture.md",
-        "docs/ai-engineering-system.md"
+        "docs/ai-engineering-system.md",
+        "context/graph.json",
+        "orchestration/plans/**",
+        "specs/**",
+        ".github/workflows/pr-gates.yml"
       ],
       "writes": []
     },
@@ -214,6 +218,7 @@
       "mode": "read",
       "dependsOn": ["pr5-deterministic-gates"],
       "reads": [
+        "specs/3-governance-hardening.md",
         "tooling/toolchain/**",
         "tooling/quality/**",
         "tooling/governance/**",
@@ -233,6 +238,7 @@
       "mode": "read",
       "dependsOn": ["pr5-deterministic-gates"],
       "reads": [
+        "specs/3-governance-hardening.md",
         "tooling/toolchain/**",
         "tooling/quality/**",
         "tooling/governance/**",
@@ -252,7 +258,14 @@
       "agent": "platform-devops",
       "mode": "write",
       "dependsOn": ["pr5-review", "pr5-security-review"],
-      "reads": ["specs/3-governance-hardening.md", ".github/workflows/**", "tooling/quality/**"],
+      "reads": [
+        "specs/3-governance-hardening.md",
+        ".github/workflows/**",
+        "tooling/quality/**",
+        "tooling/toolchain/**",
+        "tooling/governance/**",
+        "quality/**"
+      ],
       "writes": [
         ".github/workflows/pr-review.yml",
         ".github/workflows/pr-gates.yml",
@@ -286,7 +299,15 @@
       "agent": "reviewer",
       "mode": "read",
       "dependsOn": ["pr6-deterministic-gates-three-outcome-states"],
-      "reads": [".github/workflows/**", "tooling/quality/**", "docs/architecture.md", "templates/spec.md"],
+      "reads": [
+        ".github/workflows/**",
+        "tooling/quality/**",
+        "docs/architecture.md",
+        "templates/spec.md",
+        "tooling/toolchain/**",
+        "tooling/governance/**",
+        "quality/**"
+      ],
       "writes": []
     },
     {
@@ -294,7 +315,13 @@
       "agent": "security-data-reviewer",
       "mode": "read",
       "dependsOn": ["pr6-deterministic-gates-three-outcome-states"],
-      "reads": [".github/workflows/**", "tooling/quality/**"],
+      "reads": [
+        ".github/workflows/**",
+        "tooling/quality/**",
+        "tooling/toolchain/**",
+        "tooling/governance/**",
+        "quality/**"
+      ],
       "writes": []
     },
 
