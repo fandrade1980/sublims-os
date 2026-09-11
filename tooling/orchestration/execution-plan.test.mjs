@@ -67,11 +67,13 @@ test("plano inválido em qualquer ponto da base reprova a enumeração inteira",
   assert.match(result.stderr, /orchestration\/plans\/4\.json/);
 });
 
-test("base sem nenhum plano aplicável reprova; enumeração vazia não é aprovação", () => {
-  const trusted = tree({ "orchestration/plans/.manter": "" });
+test("base com diretório existente e realmente vazio reprova por enumeração vazia", () => {
+  const trusted = tree({ "AGENTS.md": "# raiz" });
+  mkdirSync(join(trusted, "orchestration/plans"), { recursive: true });
   const result = run(["--trusted", trusted]);
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /nome fora do padrão|nenhuma entrada aplicável/);
+  // Mensagem exata: `.manter` reprovaria antes, por padrão, deixando esta guarda sem prova.
+  assert.match(result.stderr, /nenhuma entrada aplicável/);
 });
 
 test("diretório de planos ausente na base reprova", () => {
@@ -218,4 +220,40 @@ test("opção repetida reprova em vez de o último valor vencer em silêncio", (
   const result = run(["--trusted", "/caminho/inexistente", "--trusted", trusted]);
   assert.equal(result.status, 1, "o último valor não pode sobrescrever o primeiro em silêncio");
   assert.match(result.stderr, /argumento repetido: --trusted/);
+});
+
+test("lista de alterações vazia reprova em vez de aprovar o candidato sem examiná-lo", () => {
+  const trusted = tree({ "orchestration/plans/3.json": plan("spec:3") });
+  const candidate = tree({
+    "orchestration/plans/3.json": plan("spec:3"),
+    "orchestration/plans/9.json": JSON.stringify({ version: 1, steps: [] })
+  });
+  const vazia = changedFile([]);
+  const result = run(["--trusted", trusted, "--candidate", candidate, "--changed", vazia]);
+  assert.equal(result.status, 1, "lista vazia não pode aprovar: o 9.json inválido nunca seria lido");
+  assert.match(result.stderr, /está vazia/);
+  assert.doesNotMatch(result.stdout, /candidato:/, "não pode afirmar que o candidato foi validado");
+});
+
+test("alteração M é efetivamente aplicada: conteúdo inválido no candidato reprova", () => {
+  const trusted = tree({ "orchestration/plans/3.json": plan("spec:3") });
+  // Mesmo caminho, conteúdo diferente e inválido. Ignorar o `M` manteria a entrada da
+  // base, que é válida, e o teste passaria sem provar nada.
+  const candidate = tree({ "orchestration/plans/3.json": JSON.stringify({ version: 1, task: "spec:3", steps: [] }) });
+  const changed = changedFile([["M", "orchestration/plans/3.json"]]);
+  const result = run(["--trusted", trusted, "--candidate", candidate, "--changed", changed]);
+  assert.equal(result.status, 1, "o conteúdo modificado do candidato precisa ser lido");
+  assert.match(result.stderr, /candidato: orchestration\/plans\/3\.json/);
+});
+
+test("modo posicional exige `task`, como o modo snapshot", () => {
+  const root = tree({
+    "orchestration/plans/3.json": JSON.stringify({
+      version: 1,
+      steps: [{ id: "u", agent: "developer", mode: "write", dependsOn: [], reads: [], writes: ["x"] }]
+    })
+  });
+  const result = run([join(root, "orchestration/plans/3.json")]);
+  assert.equal(result.status, 1, "plano sem `task` não pode passar no modo por arquivo");
+  assert.match(result.stderr, /sem `task`/);
 });

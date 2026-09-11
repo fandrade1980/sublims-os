@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -113,6 +113,21 @@ function specTree(files = {}) {
   return root;
 }
 
+function symlinkSkip() {
+  const probe = mkdtempSync(join(tmpdir(), "sublims-spec-symlink-"));
+  try {
+    writeFileSync(join(probe, "alvo.md"), "x");
+    symlinkSync(join(probe, "alvo.md"), join(probe, "link.md"));
+    return false;
+  } catch (error) {
+    // Fora de Windows, symlink sempre funciona; falhar aqui é problema de ambiente.
+    if (process.platform !== "win32") throw error;
+    return "symlink indisponível nesta plataforma";
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
+}
+
 function changedList(entries) {
   const root = mkdtempSync(join(tmpdir(), "sublims-spec-changed-"));
   const file = join(root, "changed.bin");
@@ -183,13 +198,15 @@ test("alteração legítima de especificação existente não vira duplicação"
 });
 
 test("id duplicado dentro de um mesmo snapshot reprova", () => {
+  // Dois caminhos válidos com o mesmo id: `4-outra.md` com id 3 reprovaria antes, na
+  // checagem de nome, deixando a guarda de duplicação sem prova.
   const trusted = specTree({
-    "specs/3-governance-hardening.md": specWith("3", "github:#3"),
-    "specs/4-outra.md": specWith("3", "github:#3")
+    "specs/3-a.md": specWith("3", "github:#3"),
+    "specs/3-b.md": specWith("3", "github:#3")
   });
   const result = runCli(["--trusted", trusted]);
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /id .*não corresponde|id duplicado/);
+  assert.match(result.stderr, /id duplicado/);
 });
 
 test("exclusão de especificação presente na base reprova", () => {
@@ -258,4 +275,79 @@ test("opção repetida reprova em vez de o último valor vencer em silêncio", (
   const result = runCli(["--trusted", trusted, "--changed", "a.bin", "--changed", "b.bin"]);
   assert.equal(result.status, 1);
   assert.match(result.stderr, /argumento repetido: --changed/);
+});
+
+test("base com diretório existente e realmente vazio reprova por enumeração vazia", () => {
+  const trusted = specTree({ "AGENTS.md": "# raiz" });
+  mkdirSync(join(trusted, "specs"), { recursive: true });
+  const result = runCli(["--trusted", trusted]);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /nenhuma entrada aplicável/);
+});
+
+test("lista de alterações vazia reprova em vez de aprovar o candidato sem examiná-lo", () => {
+  const trusted = specTree({ "specs/3-governance-hardening.md": specWith("3", "github:#3") });
+  const candidate = specTree({
+    "specs/3-governance-hardening.md": specWith("3", "github:#3"),
+    "specs/9-quebrada.md": "# sem metadados\n"
+  });
+  const vazia = changedList([]);
+  const result = runCli(["--trusted", trusted, "--candidate", candidate, "--changed", vazia]);
+  assert.equal(result.status, 1, "lista vazia não pode aprovar: a 9-quebrada nunca seria lida");
+  assert.match(result.stderr, /está vazia/);
+  assert.doesNotMatch(result.stdout, /candidato:/, "não pode afirmar que o candidato foi validado");
+});
+
+test("alteração M é efetivamente aplicada: conteúdo inválido no candidato reprova", () => {
+  const trusted = specTree({ "specs/3-governance-hardening.md": specWith("3", "github:#3") });
+  // Mesmo caminho, conteúdo diferente e inválido. Ignorar o `M` manteria a entrada da
+  // base, que é válida, e o teste passaria sem provar nada.
+  const candidate = specTree({ "specs/3-governance-hardening.md": "# spec sem metadados\n" });
+  const changed = changedList([["M", "specs/3-governance-hardening.md"]]);
+  const result = runCli(["--trusted", trusted, "--candidate", candidate, "--changed", changed]);
+  assert.equal(result.status, 1, "o conteúdo modificado do candidato precisa ser lido");
+  assert.match(result.stderr, /candidato: specs\/3-governance-hardening\.md/);
+});
+
+test("tarefa local que existe como diretório é recusada", () => {
+  const trusted = specTree({
+    "specs/7-com-local.md": specWith("7", "local:tasks/7-com-local.md"),
+    "AGENTS.md": "# raiz"
+  });
+  mkdirSync(join(trusted, "tasks/7-com-local.md"), { recursive: true });
+  const result = runCli(["--trusted", trusted]);
+  assert.equal(result.status, 1, "diretório não satisfaz uma referência a arquivo de tarefa");
+  assert.match(result.stderr, /issue local/);
+});
+
+test("tarefa local por symlink é recusada", { skip: symlinkSkip() }, () => {
+  const trusted = specTree({
+    "specs/7-com-local.md": specWith("7", "local:tasks/7-com-local.md"),
+    "fora/alvo.md": "# alvo fora da árvore\n",
+    "tasks/.manter": ""
+  });
+  symlinkSync(join(trusted, "fora/alvo.md"), join(trusted, "tasks/7-com-local.md"));
+  const result = runCli(["--trusted", trusted]);
+  assert.equal(result.status, 1, "symlink não pode satisfazer a referência local");
+  assert.match(result.stderr, /symlink|issue local/);
+});
+
+test("spec herdada da base reprova se a tarefa referenciada não existir na árvore candidata", () => {
+  const trusted = specTree({
+    "specs/7-com-local.md": specWith("7", "local:tasks/7-com-local.md"),
+    "tasks/7-com-local.md": "# Tarefa 7\n",
+    "specs/3-governance-hardening.md": specWith("3", "github:#3")
+  });
+  // O candidato removeu a tarefa. A referência local é resolvida contra a árvore
+  // candidata de propósito: é assim que a remoção é detectada.
+  const candidate = specTree({
+    "specs/7-com-local.md": specWith("7", "local:tasks/7-com-local.md"),
+    "specs/3-governance-hardening.md": specWith("3", "github:#3")
+  });
+  const changed = changedList([["M", "specs/3-governance-hardening.md"]]);
+
+  assert.equal(runCli(["--trusted", trusted]).status, 0, "a base, com a tarefa presente, é válida");
+  const result = runCli(["--trusted", trusted, "--candidate", candidate, "--changed", changed]);
+  assert.equal(result.status, 1, "a remoção da tarefa na árvore candidata precisa reprovar");
+  assert.match(result.stderr, /issue local inexistente/);
 });

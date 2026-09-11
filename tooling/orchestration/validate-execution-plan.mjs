@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 
-import { parseChangedFiles } from "../lib/changed-files.mjs";
+import { assertChangedFilesNotEmpty, parseChangedFiles } from "../lib/changed-files.mjs";
 import {
   PLAN_PATTERN,
   applyChanges,
@@ -21,6 +21,11 @@ const TRUSTED_RELAXATIONS = Object.freeze({ allowDeletion: false, allowEmpty: fa
 function validate(plan) {
   if (plan.version !== 1 || !Array.isArray(plan.steps) || !plan.steps.length) {
     throw new Error("plano inválido: version 1 e steps são obrigatórios");
+  }
+  // Exigido em ambos os modos: o modo posicional não pode aceitar um plano que o modo
+  // snapshot reprova, sob pena de o gate e a linha de base divergirem.
+  if (typeof plan.task !== "string" || plan.task === "") {
+    throw new Error("plano sem `task`: `task` precisa ser string não vazia");
   }
   const byId = new Map();
   for (const step of plan.steps) {
@@ -111,9 +116,6 @@ function validateSnapshot(snapshot, label) {
     } catch (error) {
       throw new Error(`${label}: ${relativePath}: ${error.message}`);
     }
-    if (typeof plan.task !== "string" || plan.task === "") {
-      throw new Error(`${label}: ${relativePath}: plano sem \`task\``);
-    }
     parsed.set(relativePath, plan);
   }
 
@@ -154,7 +156,10 @@ function parseArguments(argv) {
 
 function readChangedEntries(changedFile) {
   // Buffer, não texto: a separação por NUL acontece sobre os bytes.
-  return parseChangedFiles(readFileSync(changedFile));
+  const entries = parseChangedFiles(readFileSync(changedFile));
+  // Lista vazia faria `applyChanges` devolver cópia da base, e o CLI afirmaria ter
+  // validado o candidato sem ter lido um único byte dele.
+  return assertChangedFilesNotEmpty(entries, "lista de alterações do candidato");
 }
 
 function runSnapshotMode(trusted, candidate, changedFile) {

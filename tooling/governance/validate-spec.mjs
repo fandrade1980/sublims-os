@@ -1,11 +1,12 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync } from "node:fs";
+import { lstatSync, readFileSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 
-import { parseChangedFiles } from "../lib/changed-files.mjs";
+import { assertChangedFilesNotEmpty, parseChangedFiles } from "../lib/changed-files.mjs";
 import {
   SPEC_PATTERN,
   applyChanges,
+  assertNoSymlinkInPath,
   buildBaseSnapshot,
   findDuplicates,
   readEntryText
@@ -71,9 +72,24 @@ function validateSpecContent(markdown, fileName, projectRoot) {
     if (!/^tasks\/[0-9]+-[a-z0-9-]+\.md$/.test(localPath) || localPath.includes("..") || localPath.includes("\\")) {
       throw new Error(`issue local inválida: ${metadata.issue}`);
     }
-    if (!existsSync(resolve(projectRoot, localPath))) {
+    // `existsSync` seguiria symlink e aceitaria diretório, ao contrário de todo o
+    // resto do pipeline. A tarefa referenciada precisa ser arquivo regular, e nenhum
+    // componente do caminho pode ser symlink.
+    // `lstat` primeiro: dá a mensagem específica para tarefa ausente, e não segue link.
+    let stats;
+    try {
+      stats = lstatSync(resolve(projectRoot, localPath));
+    } catch {
       throw new Error(`issue local inexistente: ${metadata.issue}`);
     }
+    if (stats.isSymbolicLink()) {
+      throw new Error(`issue local por symlink não é aceita: ${metadata.issue}`);
+    }
+    if (!stats.isFile()) {
+      throw new Error(`issue local não é arquivo regular: ${metadata.issue}`);
+    }
+    // Cobre os componentes ancestrais do caminho da tarefa.
+    assertNoSymlinkInPath(projectRoot, localPath);
   } else if (!/^github:#\d+$/.test(metadata.issue)) {
     throw new Error(`referência de issue inválida: ${metadata.issue}`);
   }
@@ -167,8 +183,13 @@ function runSnapshotMode(trusted, candidate, changedFile) {
   if (!changedFile) throw new Error("--changed é obrigatório quando --candidate é informado");
   const effective = applyChanges({
     base,
-    // Buffer, não texto: a separação por NUL acontece sobre os bytes.
-    changes: parseChangedFiles(readFileSync(changedFile)),
+    // Buffer, não texto: a separação por NUL acontece sobre os bytes. Lista vazia faria
+    // `applyChanges` devolver cópia da base, e o CLI afirmaria ter validado o candidato
+    // sem ter lido um único byte dele.
+    changes: assertChangedFilesNotEmpty(
+      parseChangedFiles(readFileSync(changedFile)),
+      "lista de alterações do candidato"
+    ),
     root: candidate,
     directory: SPECS_DIRECTORY,
     pattern: SPEC_PATTERN,
