@@ -158,20 +158,36 @@
       "agent": "developer",
       "mode": "write",
       "dependsOn": ["pr4-review", "pr4-security-review"],
-      "reads": ["specs/3-governance-hardening.md", "tooling/**", "quality/**"],
+      "reads": [
+        "specs/3-governance-hardening.md",
+        "tooling/**",
+        "quality/**",
+        "package.json",
+        "package-lock.json",
+        "docs/architecture.md",
+        "docs/ai-engineering-system.md"
+      ],
       "writes": [
         "tooling/toolchain/package.json",
         "tooling/toolchain/package-lock.json",
+        "tooling/toolchain/complexity.config.mjs",
+        "tooling/toolchain/dependency-cruiser.json",
+        "tooling/lib/spec-meta.mjs",
+        "tooling/lib/spec-meta.test.mjs",
         "tooling/quality/compare-policy.mjs",
         "tooling/quality/compare-policy.test.mjs",
         "tooling/quality/validate-candidate-config.mjs",
         "tooling/quality/validate-candidate-config.test.mjs",
         "tooling/quality/validate-lockfile.mjs",
         "tooling/quality/validate-lockfile.test.mjs",
+        "tooling/governance/validate-spec.mjs",
         "tooling/governance/validate-pr.mjs",
         "tooling/governance/pr-cli.test.mjs",
         "quality/policy.json",
-        "quality/policy-exceptions.json"
+        "quality/policy-exceptions.json",
+        "package-lock.json",
+        "docs/architecture.md",
+        "docs/ai-engineering-system.md"
       ]
     },
     {
@@ -187,7 +203,16 @@
       "agent": "reviewer",
       "mode": "read",
       "dependsOn": ["pr5-deterministic-gates"],
-      "reads": ["tooling/toolchain/**", "tooling/quality/**", "tooling/governance/**", "quality/**"],
+      "reads": [
+        "tooling/toolchain/**",
+        "tooling/quality/**",
+        "tooling/governance/**",
+        "tooling/lib/**",
+        "quality/**",
+        "package-lock.json",
+        "docs/architecture.md",
+        "docs/ai-engineering-system.md"
+      ],
       "writes": []
     },
     {
@@ -195,7 +220,16 @@
       "agent": "security-data-reviewer",
       "mode": "read",
       "dependsOn": ["pr5-deterministic-gates"],
-      "reads": ["tooling/toolchain/**", "tooling/quality/**", "tooling/governance/**", "quality/**"],
+      "reads": [
+        "tooling/toolchain/**",
+        "tooling/quality/**",
+        "tooling/governance/**",
+        "tooling/lib/**",
+        "quality/**",
+        "package-lock.json",
+        "docs/architecture.md",
+        "docs/ai-engineering-system.md"
+      ],
       "writes": []
     },
 
