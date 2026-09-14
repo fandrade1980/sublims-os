@@ -4,6 +4,11 @@ import { basename, dirname, resolve } from "node:path";
 
 import { assertChangedFilesNotEmpty, parseChangedFiles } from "../lib/changed-files.mjs";
 import {
+  assertSpecIdentity,
+  canonicalSpecId,
+  parseSpecMeta
+} from "../lib/spec-meta.mjs";
+import {
   SPEC_PATTERN,
   applyChanges,
   assertNoSymlinkInPath,
@@ -41,26 +46,12 @@ function sections(markdown) {
   return result;
 }
 
-function specMetadata(markdown) {
-  const metadataMatches = [...markdown.matchAll(/<!-- spec-meta\s*\r?\n([\s\S]*?)\r?\n-->/g)];
-  if (metadataMatches.length !== 1) {
-    throw new Error("metadados spec-meta ausentes ou duplicados");
-  }
-  try {
-    return JSON.parse(metadataMatches[0][1]);
-  } catch {
-    throw new Error("metadados spec-meta não são JSON válido");
-  }
-}
-
 // Validação de conteúdo, independente de onde o texto veio: arquivo solto na invocação
-// por caminho, ou entrada de snapshot lida por `readEntryText`.
+// por caminho, ou entrada de snapshot lida por `readEntryText`. Leitura e identidade
+// dos metadados vêm do contrato compartilhado em `tooling/lib/spec-meta.mjs`.
 function validateSpecContent(markdown, fileName, projectRoot) {
-  const metadata = specMetadata(markdown);
-  const fileId = fileName.match(/^(\d+)-/)?.[1];
-  if (!fileId || metadata.id !== fileId) {
-    throw new Error(`id ${metadata.id ?? "ausente"} não corresponde ao nome do arquivo`);
-  }
+  const metadata = parseSpecMeta(markdown);
+  assertSpecIdentity(metadata, fileName);
   if (metadata.status !== "approved") {
     throw new Error("a especificação não está aprovada nos metadados");
   }
@@ -106,15 +97,6 @@ function validateFile(file) {
     ? resolve(dirname(file), "..")
     : dirname(file);
   validateSpecContent(readFileSync(file, "utf8"), basename(file), projectRoot);
-}
-
-// Identidade canônica usada EXCLUSIVAMENTE para apurar unicidade. `3`, `03`, `003` e
-// `0003` designam a mesma issue e precisam colidir. A remoção dos zeros é textual: usar
-// `Number` ou `parseInt` perderia precisão em identificadores longos.
-// A comparação entre o prefixo do arquivo e `metadata.id` permanece estrita e textual,
-// para que ids legados como `004` continuem válidos enquanto o nome corresponder.
-function canonicalSpecId(id) {
-  return String(id).replace(/^0+(?=\d)/, "");
 }
 
 // Cada snapshot é verificado por inteiro e isoladamente. Unicidade nunca é apurada pela
