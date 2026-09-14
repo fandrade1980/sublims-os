@@ -1,0 +1,63 @@
+{
+  "forbidden": [
+    {
+      "name": "domain-not-to-ui",
+      "severity": "error",
+      "from": {
+        "path": "^src/modules/[^/]+/domain/"
+      },
+      "to": {
+        "path": "^src/(app|components|ui)/"
+      }
+    },
+    {
+      "name": "domain-not-to-infrastructure",
+      "severity": "error",
+      "from": {
+        "path": "^src/modules/[^/]+/domain/"
+      },
+      "to": {
+        "path": [
+          "^src/modules/[^/]+/adapters/",
+          "^src/shared/(db|http|clock|automation)/"
+        ]
+      }
+    },
+    {
+      "name": "module-not-to-foreign-adapters",
+      "severity": "error",
+      "from": {
+        "path": "^src/modules/([^/]+)/"
+      },
+      "to": {
+        "path": "^src/modules/[^/]+/adapters/",
+        "pathNot": "^src/modules/$1/adapters/"
+      }
+    },
+    {
+      "name": "integrations-only-to-module-seam",
+      "severity": "error",
+      "from": {
+        "path": "^src/integrations/(n8n|ai)/"
+      },
+      "to": {
+        "path": "^src/modules/[^/]+/",
+        "pathNot": "^src/modules/[^/]+/index\\.ts$"
+      }
+    },
+    {
+      "name": "not-to-unresolvable",
+      "severity": "error",
+      "from": {},
+      "to": {
+        "couldNotResolve": true
+      }
+    }
+  ],
+  "options": {
+    "tsPreCompilationDeps": true,
+    "doNotFollow": {
+      "path": "^node_modules/"
+    }
+  }
+}
