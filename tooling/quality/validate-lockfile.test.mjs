@@ -694,3 +694,227 @@ test("controle positivo: link direto para descritor local sem link continua acei
   }));
   assert.equal(result.status, 0, result.stderr);
 });
+
+// Lockfile legítimo sem dependências externas.
+//
+// Um projeto pode não ter dependência alguma — é o caso do próprio repositório. Nesse
+// cenário, "conjunto externo vazio" é a verdade declarada, não uma enumeração perdida.
+// A distinção que importa: vazio porque nada foi declarado, contra vazio porque a
+// lista foi esvaziada. A segunda continua reprovando.
+
+const RAIZ_SEM_DEPENDENCIAS = { name: "fixture", version: "0.0.0" };
+
+function semDependencias(raiz = RAIZ_SEM_DEPENDENCIAS) {
+  return escrever({
+    packages: { "": raiz },
+    allowedRegistries: [REGISTRY_AUTORIZADO],
+    acceptedIntegrityAlgorithms: ALGORITMOS_ACEITOS
+  });
+}
+
+test("lockfile v3 sem dependência alguma é aceito", () => {
+  const result = run(semDependencias());
+  assert.doesNotMatch(result.stderr ?? "", /MODULE_NOT_FOUND|Cannot find module/, "CLI precisa existir");
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout ?? "", /0 dependências resolvidas por registry autorizado/);
+});
+
+// Coleções presentes e vazias continuam sendo ausência de dependência declarada.
+for (const campo of ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"]) {
+  test(`lockfile sem dependências com \`${campo}\` vazio é aceito`, () => {
+    const result = run(semDependencias({ ...RAIZ_SEM_DEPENDENCIAS, [campo]: {} }));
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout ?? "", /0 dependências resolvidas por registry autorizado/);
+  });
+}
+
+test("as quatro coleções vazias ao mesmo tempo são aceitas", () => {
+  const result = run(
+    semDependencias({
+      ...RAIZ_SEM_DEPENDENCIAS,
+      dependencies: {},
+      devDependencies: {},
+      optionalDependencies: {},
+      peerDependencies: {}
+    })
+  );
+  assert.equal(result.status, 0, result.stderr);
+});
+
+// Deliberadamente NÃO existe aqui um teste contra o `package-lock.json` real do
+// repositório. O contrato é provado por fixture; o artefato real é estado, não
+// contrato. Hoje ele não tem dependência alguma, mas a fundação da aplicação
+// acrescentará dependências legítimas, e um teste que exigisse permanentemente
+// "0 dependências" passaria a falhar sem defeito algum no validador.
+//
+// A prova operacional contra o artefato real continua existindo — executada fora da
+// suíte, junto dos demais validadores diretos.
+
+// --- negativos ---
+
+test("packages sem a entrada raiz reprova", () => {
+  const result = run(
+    escrever({
+      packages: {},
+      allowedRegistries: [REGISTRY_AUTORIZADO],
+      acceptedIntegrityAlgorithms: ALGORITMOS_ACEITOS
+    })
+  );
+  assertRejeicaoDeDominio(result, /lockfile sem descritor da raiz/i);
+});
+
+for (const [nome, raiz] of [
+  ["null", null],
+  ["string", "fixture"],
+  ["array", []],
+  ["número", 1],
+  ["booleano", true]
+]) {
+  test(`descritor da raiz como ${nome} reprova`, () => {
+    const result = run(semDependencias(raiz));
+    assertRejeicaoDeDominio(result, /descritor da raiz inválido/i);
+  });
+}
+
+// Dependência declarada sem entrada correspondente: a enumeração está incompleta, e
+// aprovar seria aprovar o que não foi verificado.
+for (const campo of ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"]) {
+  test(`\`${campo}\` não vazio sem entrada enumerada reprova`, () => {
+    const result = run(
+      semDependencias({ ...RAIZ_SEM_DEPENDENCIAS, [campo]: { [PACOTE_PRIVADO]: "1.0.0" } })
+    );
+    assertRejeicaoDeDominio(result, /lockfile declara dependências sem entradas enumeradas/i);
+    assertSemVazamento(result);
+  });
+}
+
+for (const [nome, valor] of [
+  ["array", []],
+  ["string", "left-pad"],
+  ["número", 1],
+  ["null", null],
+  ["booleano", true]
+]) {
+  test(`coleção de dependências da raiz como ${nome} reprova`, () => {
+    const result = run(semDependencias({ ...RAIZ_SEM_DEPENDENCIAS, dependencies: valor }));
+    assertRejeicaoDeDominio(result, /coleção de dependências inválida no descritor da raiz/i);
+  });
+}
+
+test("dependencies legado no topo, não vazio e sem entradas enumeradas, reprova", () => {
+  const root = mkdtempSync(join(tmpdir(), "sublims-lockfile-"));
+  const lockfilePath = join(root, "package-lock.json");
+  const policyPath = join(root, "policy.json");
+  writeFileSync(
+    lockfilePath,
+    JSON.stringify({
+      name: "fixture",
+      version: "0.0.0",
+      lockfileVersion: 3,
+      requires: true,
+      packages: { "": RAIZ_SEM_DEPENDENCIAS },
+      dependencies: { [PACOTE_PRIVADO]: { version: "1.0.0" } }
+    })
+  );
+  writeFileSync(
+    policyPath,
+    JSON.stringify({
+      version: 2,
+      lockfile: {
+        allowedRegistries: [REGISTRY_AUTORIZADO],
+        acceptedIntegrityAlgorithms: ALGORITMOS_ACEITOS,
+        acceptedLockfileVersions: VERSOES_ACEITAS
+      }
+    })
+  );
+  const result = run({ lockfilePath, policyPath });
+  assertRejeicaoDeDominio(result, /lockfile declara dependências sem entradas enumeradas/i);
+  assertSemVazamento(result);
+});
+
+// `--expect` permanece fail-closed: lockfile vazio não satisfaz expectativa alguma.
+// O nome precisa ser canônico — minúsculo — senão `--expect` reprova antes, como
+// argumento malformado, e o teste deixaria de exercitar a expectativa em si.
+const PACOTE_PRIVADO_CANONICO = PACOTE_PRIVADO.toLowerCase();
+
+test("expectativa contra lockfile sem dependências reprova", () => {
+  const result = runComExpect(semDependencias(), [`${PACOTE_PRIVADO_CANONICO}@1.0.0`]);
+  assertRejeicaoDeDominio(result, /expectativa não satisfeita/i);
+  assertSemVazamento(result, [PACOTE_PRIVADO_CANONICO]);
+});
+
+test("mensagens do caminho vazio não ecoam nome, versão nem conteúdo", () => {
+  const comDependencia = run(
+    semDependencias({ ...RAIZ_SEM_DEPENDENCIAS, dependencies: { [PACOTE_PRIVADO]: "9.9.9" } })
+  );
+  assertSemVazamento(comDependencia, ["9.9.9"]);
+  const colecaoInvalida = run(semDependencias({ ...RAIZ_SEM_DEPENDENCIAS, dependencies: PACOTE_PRIVADO }));
+  assertSemVazamento(colecaoInvalida);
+});
+
+// Coleção legada no topo do lockfile.
+//
+// `dependencies` no topo é a forma anterior a `packages`. Presente e vazia é ausência
+// de declaração; presente e malformada é erro de forma, com classe própria — colapsar
+// as duas numa só mensagem esconderia qual ação corrige o arquivo.
+
+function comLegado(valorLegado, { omitir = false } = {}) {
+  const root = mkdtempSync(join(tmpdir(), "sublims-lockfile-"));
+  const lockfilePath = join(root, "package-lock.json");
+  const policyPath = join(root, "policy.json");
+  const conteudo = {
+    name: "fixture",
+    version: "0.0.0",
+    lockfileVersion: 3,
+    requires: true,
+    packages: { "": RAIZ_SEM_DEPENDENCIAS }
+  };
+  if (!omitir) conteudo.dependencies = valorLegado;
+  writeFileSync(lockfilePath, JSON.stringify(conteudo));
+  writeFileSync(
+    policyPath,
+    JSON.stringify({
+      version: 2,
+      lockfile: {
+        allowedRegistries: [REGISTRY_AUTORIZADO],
+        acceptedIntegrityAlgorithms: ALGORITMOS_ACEITOS,
+        acceptedLockfileVersions: VERSOES_ACEITAS
+      }
+    })
+  );
+  return { lockfilePath, policyPath };
+}
+
+test("dependencies legado vazio com conjunto externo vazio é aceito", () => {
+  const result = run(comLegado({}));
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout ?? "", /0 dependências resolvidas por registry autorizado/);
+});
+
+test("dependencies legado não vazio reprova como dependências sem entradas enumeradas", () => {
+  const result = run(comLegado({ [PACOTE_PRIVADO]: { version: "9.9.9" } }));
+  assertRejeicaoDeDominio(result, /lockfile declara dependências sem entradas enumeradas/i);
+  assertSemVazamento(result, ["9.9.9"]);
+});
+
+for (const [nome, valor] of [
+  ["null", null],
+  ["string", "left-pad"],
+  ["número", 1],
+  ["booleano", true],
+  ["array", []]
+]) {
+  test(`dependencies legado como ${nome} reprova por forma inválida`, () => {
+    const result = run(comLegado(valor));
+    assertRejeicaoDeDominio(result, /coleção de dependências legada inválida/i);
+  });
+}
+
+test("mensagens da coleção legada não ecoam conteúdo candidato", () => {
+  const naoVazio = run(comLegado({ [PACOTE_PRIVADO]: { version: "9.9.9" } }));
+  assertSemVazamento(naoVazio, ["9.9.9"]);
+  const formaInvalida = run(comLegado(PACOTE_PRIVADO));
+  assertSemVazamento(formaInvalida);
+  const arrayComConteudo = run(comLegado([PACOTE_PRIVADO]));
+  assertSemVazamento(arrayComConteudo);
+});

@@ -215,16 +215,76 @@ function descritorObjeto(packages, chave) {
   return descritor !== null && typeof descritor === "object" && !Array.isArray(descritor);
 }
 
+// As quatro coleções que um descritor pode usar para declarar dependência.
+const COLECOES_DE_DEPENDENCIA = Object.freeze([
+  "dependencies",
+  "devDependencies",
+  "optionalDependencies",
+  "peerDependencies"
+]);
+
+// `true` quando a coleção declara ao menos um pacote. Forma inválida lança: um campo
+// presente e ilegível não pode ser lido como "não declara nada".
+//
+// As chaves nunca entram na mensagem — são nomes de pacote do projeto examinado.
+function colecaoDeclaraPacote(descritor, campo, mensagemDeFormaInvalida) {
+  if (!Object.hasOwn(descritor, campo)) return false;
+  const colecao = descritor[campo];
+  if (colecao === null || typeof colecao !== "object" || Array.isArray(colecao)) {
+    throw new Error(mensagemDeFormaInvalida);
+  }
+  return Object.keys(colecao).length > 0;
+}
+
+// `dependencies` no topo é a forma legada, anterior a `packages`. Presente e
+// malformada REPROVA por classe própria, em vez de ser contada como declaração: as
+// duas situações pedem ações diferentes — corrigir a forma do arquivo, ou enumerar as
+// entradas que faltam — e colapsá-las numa só mensagem esconderia a causa real.
+function topoLegadoDeclaraPacote(lockfile) {
+  if (!Object.hasOwn(lockfile, "dependencies")) return false;
+  const colecao = lockfile.dependencies;
+  if (colecao === null || typeof colecao !== "object" || Array.isArray(colecao)) {
+    throw new Error("coleção de dependências legada inválida");
+  }
+  return Object.keys(colecao).length > 0;
+}
+
 function lockfileEntries(lockfile) {
   const packages = lockfile?.packages;
   if (packages === null || typeof packages !== "object" || Array.isArray(packages)) {
     throw new Error("lockfile sem `packages`; enumeração ausente não é aprovação");
   }
   const entries = Object.entries(packages).filter(([name]) => name !== "");
-  if (entries.length === 0) {
-    throw new Error("lockfile sem dependências enumeradas; conjunto vazio não é aprovação");
+  if (entries.length > 0) return entries;
+
+  // Conjunto externo vazio tem duas causas possíveis, e só uma é legítima: o projeto
+  // não declara dependência alguma. A outra — a lista foi esvaziada enquanto o
+  // descritor raiz do próprio lockfile ainda declara pacotes — continua reprovando,
+  // porque aprovar seria aprovar o que não foi enumerado e, portanto, não foi
+  // verificado.
+  //
+  // A distinção é feita pelo que o PRÓPRIO lockfile declara. O manifesto não é lido
+  // aqui: sincronizar `package.json` e lockfile é responsabilidade de `npm ci`, e
+  // duplicá-la neste validador criaria uma segunda fonte de verdade.
+  if (!Object.hasOwn(packages, "")) {
+    throw new Error("lockfile sem descritor da raiz");
   }
-  return entries;
+  const raiz = packages[""];
+  if (raiz === null || typeof raiz !== "object" || Array.isArray(raiz)) {
+    throw new Error("descritor da raiz inválido");
+  }
+  const declara =
+    COLECOES_DE_DEPENDENCIA.some((campo) =>
+      colecaoDeclaraPacote(raiz, campo, "coleção de dependências inválida no descritor da raiz")
+    ) || topoLegadoDeclaraPacote(lockfile);
+  if (declara) {
+    throw new Error("lockfile declara dependências sem entradas enumeradas");
+  }
+
+  // Nenhuma dependência declarada e nenhuma enumerada: coerente. A verificação de
+  // `--expect` acontece depois e permanece fail-closed — expectativa alguma é
+  // satisfeita por um conjunto vazio.
+  return [];
 }
 
 // Uma expectativa só é satisfeita por dependência externa real, localizada apenas em
