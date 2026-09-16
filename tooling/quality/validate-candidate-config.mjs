@@ -63,21 +63,33 @@ function assertCoverage(vitest, policy) {
   const thresholds = objectProperty(coverage, "thresholds");
   for (const metric of ["lines", "branches", "functions", "statements"]) {
     const expected = policy?.coverage?.[metric];
-    const match = thresholds?.match(new RegExp(`\\b${metric}\\s*:\\s*(\\d+)`, "u"));
+    const match = singleAnchor(thresholds, new RegExp(`\\b${metric}\\s*:\\s*(\\d+)`, "gu"), metric);
     if (!Number.isFinite(expected) || !match || Number(match[1]) < expected) {
       throw new Error("limiar de cobertura incompatível com a política");
     }
   }
 }
 
+function singleAnchor(source, pattern, name) {
+  if (typeof source !== "string") return null;
+  const matches = [...source.matchAll(pattern)];
+  if (matches.length > 1) {
+    const positions = matches.map((match) => match.index).join(", ");
+    throw new Error(
+      `configuração ambígua: âncora "${name}" ocorre ${matches.length} vezes no trecho inspecionado (deslocamentos ${positions})`
+    );
+  }
+  return matches.length === 1 ? matches[0] : null;
+}
+
 function objectProperty(source, name) {
-  const match = new RegExp(`\\b${name}\\s*:\\s*\\{`, "u").exec(source);
+  const match = singleAnchor(source, new RegExp(`\\b${name}\\s*:\\s*\\{`, "gu"), name);
   if (match === null) return null;
   return balancedContent(source, match.index + match[0].lastIndexOf("{"), "{", "}");
 }
 
 function stringArrayProperty(source, name) {
-  const match = new RegExp(`\\b${name}\\s*:\\s*\\[`, "u").exec(source);
+  const match = singleAnchor(source, new RegExp(`\\b${name}\\s*:\\s*\\[`, "gu"), name);
   if (match === null) return null;
   const content = balancedContent(source, match.index + match[0].lastIndexOf("["), "[", "]");
   if (content === null) return null;
@@ -145,7 +157,7 @@ function assertLint(eslint, policy) {
 }
 
 function exportedConfig(source) {
-  const match = /\bexport\s+default\b/gu.exec(source);
+  const match = singleAnchor(source, /\bexport\s+default\b/gu, "export default");
   return match === null ? null : source.slice(match.index + match[0].length);
 }
 
