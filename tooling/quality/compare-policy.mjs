@@ -534,6 +534,23 @@ function carregarPolitica(root, origem) {
   return policy;
 }
 
+// `toolPackages` participa da igualdade exata dos comandos. Sem isso, o candidato
+// trocaria a ferramenta de que o gate depende mantendo nome, executável, origem e
+// argumentos idênticos, e a política continuaria "igual" aos olhos do comparador.
+//
+// Comparação posicional e textual: sem normalizar, ordenar, deduplicar ou transformar
+// nomes. Ordenar tornaria dois arranjos distintos indistinguíveis; deduplicar
+// esconderia uma lista que declara a mesma ferramenta duas vezes.
+function listasDePacotesIguais(trustedCommand, candidateCommand) {
+  const daBase = trustedCommand.toolPackages;
+  const doCandidato = candidateCommand.toolPackages;
+  if (!Array.isArray(daBase) || !Array.isArray(doCandidato)) return false;
+  if (daBase.some((item) => typeof item !== "string")) return false;
+  if (doCandidato.some((item) => typeof item !== "string")) return false;
+  if (daBase.length !== doCandidato.length) return false;
+  return daBase.every((item, indice) => item === doCandidato[indice]);
+}
+
 function assertQuantidadeDeComandos(trustedPolicy, candidatePolicy) {
   if (
     !Array.isArray(trustedPolicy.commands) ||
@@ -567,7 +584,8 @@ function assertQuantidadeDeComandos(trustedPolicy, candidatePolicy) {
       trustedCommand.args.some((arg) => typeof arg !== "string") ||
       candidateCommand.args.some((arg) => typeof arg !== "string") ||
       trustedCommand.args.length !== candidateCommand.args.length ||
-      trustedCommand.args.some((arg, argIndex) => arg !== candidateCommand.args[argIndex])
+      trustedCommand.args.some((arg, argIndex) => arg !== candidateCommand.args[argIndex]) ||
+      !listasDePacotesIguais(trustedCommand, candidateCommand)
     ) {
       throw new Error("comandos da política candidata divergem da base confiável");
     }

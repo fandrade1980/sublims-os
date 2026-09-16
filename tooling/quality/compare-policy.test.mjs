@@ -41,18 +41,52 @@ function politicaPadrao() {
   return {
     version: 2,
     enabled: true,
+    // `toolPackages` espelha a política real: comandos de origem `candidate` declaram
+    // as ferramentas de que dependem; os de origem `base` declaram lista vazia, porque
+    // a ferramenta vem do toolchain confiável.
     commands: [
-      { name: "typecheck", origin: "candidate", executable: "node", args: ["tsc", "--noEmit"] },
-      { name: "lint", origin: "candidate", executable: "node", args: ["eslint", "src"] },
-      { name: "test:coverage", origin: "candidate", executable: "node", args: ["vitest", "run"] },
-      { name: "quality:complexity", origin: "base", executable: "node", args: ["eslint", "src"] },
+      {
+        name: "typecheck",
+        origin: "candidate",
+        executable: "node",
+        args: ["tsc", "--noEmit"],
+        toolPackages: ["typescript"]
+      },
+      {
+        name: "lint",
+        origin: "candidate",
+        executable: "node",
+        args: ["eslint", "src"],
+        toolPackages: ["eslint"]
+      },
+      {
+        name: "test:coverage",
+        origin: "candidate",
+        executable: "node",
+        args: ["vitest", "run"],
+        toolPackages: ["vitest", "@vitest/coverage-v8"]
+      },
+      {
+        name: "quality:complexity",
+        origin: "base",
+        executable: "node",
+        args: ["eslint", "src"],
+        toolPackages: []
+      },
       {
         name: "quality:dependencies",
         origin: "base",
         executable: "node",
-        args: ["dependency-cruiser", "src"]
+        args: ["dependency-cruiser", "src"],
+        toolPackages: []
       },
-      { name: "build", origin: "candidate", executable: "node", args: ["next", "build"] }
+      {
+        name: "build",
+        origin: "candidate",
+        executable: "node",
+        args: ["next", "build"],
+        toolPackages: ["next"]
+      }
     ],
     coverage: {
       lines: 80,
@@ -1938,6 +1972,134 @@ for (const [nome, alterar] of [
     assertReprovaInterface(result, /comandos da política candidata divergem da base confiável/i);
   });
 }
+
+// ---------------------------------------------------------------------------------
+// `toolPackages` integra a igualdade exata dos comandos.
+//
+// A lista declara de quais pacotes a ferramenta do comando depende. Se ela não
+// participasse da comparação, o candidato poderia trocar a ferramenta de que o gate
+// depende mantendo nome, executável, origem e argumentos idênticos — e a política
+// continuaria "igual" aos olhos do comparador.
+// ---------------------------------------------------------------------------------
+
+for (const [nome, alterar] of [
+  ["remover um elemento", (comando) => comando.toolPackages.pop()],
+  ["acrescentar um elemento", (comando) => comando.toolPackages.push("outro-pacote")],
+  ["substituir um elemento", (comando) => comando.toolPackages.splice(0, 1, "outro-pacote")]
+]) {
+  test(`${nome} de toolPackages reprova`, () => {
+    const result = executarComPoliticas(`toolpackages-${nome.replace(/\s+/gu, "-")}`, (policy) => {
+      alterar(policy.commands[0]);
+      return policy;
+    });
+    assertReprovaInterface(result, /comandos da política candidata divergem da base confiável/i);
+  });
+}
+
+// Reordenar preserva o conjunto e muda a sequência. Sem comparação posicional, os dois
+// arranjos seriam indistinguíveis.
+test("reordenar os dois elementos de toolPackages de test:coverage reprova", () => {
+  const result = executarComPoliticas("toolpackages-reordenados", (policy) => {
+    const comando = policy.commands.find((item) => item.name === "test:coverage");
+    comando.toolPackages.reverse();
+    return policy;
+  });
+  assertReprovaInterface(result, /comandos da política candidata divergem da base confiável/i);
+});
+
+test("omitir toolPackages reprova", () => {
+  const result = executarComPoliticas("toolpackages-omitido", (policy) => {
+    delete policy.commands[0].toolPackages;
+    return policy;
+  });
+  assertReprovaInterface(result, /comandos da política candidata divergem da base confiável/i);
+});
+
+for (const [nome, valor] of [
+  ["string", "typescript"],
+  ["objeto", { 0: "typescript" }],
+  ["null", null],
+  ["número", 1],
+  ["booleano", true]
+]) {
+  test(`toolPackages como ${nome} reprova`, () => {
+    const result = executarComPoliticas(`toolpackages-tipo-${nome}`, (policy) => {
+      policy.commands[0].toolPackages = valor;
+      return policy;
+    });
+    assertReprovaInterface(result, /comandos da política candidata divergem da base confiável/i);
+  });
+}
+
+for (const [nome, elemento] of [
+  ["número", 1],
+  ["null", null],
+  ["booleano", true],
+  ["objeto", { nome: "typescript" }],
+  ["array aninhado", ["typescript"]]
+]) {
+  test(`elemento não textual em toolPackages reprova: ${nome}`, () => {
+    const result = executarComPoliticas(`toolpackages-elemento-${nome}`, (policy) => {
+      policy.commands[0].toolPackages = [elemento];
+      return policy;
+    });
+    assertReprovaInterface(result, /comandos da política candidata divergem da base confiável/i);
+  });
+}
+
+// Esvaziar a lista onde a base exige ferramenta é o afrouxamento mais direto: o gate
+// passaria a não depender de ferramenta alguma.
+test("lista vazia onde a base exige ferramenta reprova", () => {
+  const result = executarComPoliticas("toolpackages-vazio", (policy) => {
+    policy.commands[0].toolPackages = [];
+    return policy;
+  });
+  assertReprovaInterface(result, /comandos da política candidata divergem da base confiável/i);
+});
+
+test("esvaziar a lista de dois elementos de test:coverage reprova", () => {
+  const result = executarComPoliticas("toolpackages-vazio-dois", (policy) => {
+    policy.commands.find((item) => item.name === "test:coverage").toolPackages = [];
+    return policy;
+  });
+  assertReprovaInterface(result, /comandos da política candidata divergem da base confiável/i);
+});
+
+// Nome de pacote é conteúdo do candidato e não pertence ao log de um gate.
+// `assertReprovaInterface` já verifica a ausência do marcador e do stack trace.
+test("mensagem não ecoa conteúdo sensível declarado em toolPackages", () => {
+  const result = executarComPoliticas("toolpackages-eco", (policy) => {
+    policy.commands[0].toolPackages = [`@interno/${MARCADOR}`];
+    policy.commands[1].toolPackages = [MARCADOR.toLowerCase()];
+    return policy;
+  });
+  assertReprovaInterface(result, /comandos da política candidata divergem da base confiável/i);
+});
+
+// Controles positivos: a comparação não pode reprovar demais.
+test("toolPackages idênticos em todos os seis comandos são aprovados", () => {
+  const result = executarComPoliticas("toolpackages-identicos", (policy) => policy);
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test("a lista de dois elementos de test:coverage, idêntica, é aprovada", () => {
+  const result = executarComPoliticas("toolpackages-dois-identicos", (policy) => {
+    const comando = policy.commands.find((item) => item.name === "test:coverage");
+    assert.deepEqual(comando.toolPackages, ["vitest", "@vitest/coverage-v8"]);
+    return policy;
+  });
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test("listas vazias idênticas dos comandos de origem base são aprovadas", () => {
+  const result = executarComPoliticas("toolpackages-vazias-identicas", (policy) => {
+    const daBase = policy.commands.filter((item) => item.origin === "base");
+    assert.equal(daBase.length, 2);
+    for (const comando of daBase) assert.deepEqual(comando.toolPackages, []);
+    return policy;
+  });
+  assert.equal(result.status, 0, result.stderr);
+});
 
 test("desabilitar a política sem autorização confiável reprova", () => {
   const result = executarComPoliticas("enabled-sem-autorizacao", (policy) => {
