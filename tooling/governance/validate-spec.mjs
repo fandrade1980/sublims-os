@@ -61,7 +61,7 @@ function validateSpecContent(markdown, fileName, projectRoot) {
   if (metadata.issue.startsWith("local:")) {
     const localPath = metadata.issue.slice("local:".length);
     if (!/^tasks\/[0-9]+-[a-z0-9-]+\.md$/.test(localPath) || localPath.includes("..") || localPath.includes("\\")) {
-      throw new Error(`issue local inválida: ${metadata.issue}`);
+      throw new Error("issue local inválida");
     }
     // `existsSync` seguiria symlink e aceitaria diretório, ao contrário de todo o
     // resto do pipeline. A tarefa referenciada precisa ser arquivo regular, e nenhum
@@ -71,18 +71,18 @@ function validateSpecContent(markdown, fileName, projectRoot) {
     try {
       stats = lstatSync(resolve(projectRoot, localPath));
     } catch {
-      throw new Error(`issue local inexistente: ${metadata.issue}`);
+      throw new Error("issue local inexistente");
     }
     if (stats.isSymbolicLink()) {
-      throw new Error(`issue local por symlink não é aceita: ${metadata.issue}`);
+      throw new Error("issue local por symlink não é aceita");
     }
     if (!stats.isFile()) {
-      throw new Error(`issue local não é arquivo regular: ${metadata.issue}`);
+      throw new Error("issue local não é arquivo regular");
     }
     // Cobre os componentes ancestrais do caminho da tarefa.
     assertNoSymlinkInPath(projectRoot, localPath);
   } else if (!/^github:#\d+$/.test(metadata.issue)) {
-    throw new Error(`referência de issue inválida: ${metadata.issue}`);
+    throw new Error("referência de issue inválida");
   }
   const parsed = sections(markdown);
   const missing = REQUIRED_HEADINGS.filter((heading) => !parsed.get(heading));
