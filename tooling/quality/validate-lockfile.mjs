@@ -223,49 +223,67 @@ const COLECOES_DE_DEPENDENCIA = Object.freeze([
   "peerDependencies"
 ]);
 
-// `true` quando a coleção declara ao menos um pacote. Forma inválida lança: um campo
+// Nomes declarados pela coleção, na ordem do arquivo. Forma inválida lança: um campo
 // presente e ilegível não pode ser lido como "não declara nada".
 //
 // As chaves nunca entram na mensagem — são nomes de pacote do projeto examinado.
-function colecaoDeclaraPacote(descritor, campo, mensagemDeFormaInvalida) {
-  if (!Object.hasOwn(descritor, campo)) return false;
+function nomesDeclaradosNaColecao(descritor, campo, mensagemDeFormaInvalida) {
+  if (!Object.hasOwn(descritor, campo)) return [];
   const colecao = descritor[campo];
   if (colecao === null || typeof colecao !== "object" || Array.isArray(colecao)) {
     throw new Error(mensagemDeFormaInvalida);
   }
-  return Object.keys(colecao).length > 0;
+  return Object.keys(colecao);
 }
 
 // `dependencies` no topo é a forma legada, anterior a `packages`. Presente e
 // malformada REPROVA por classe própria, em vez de ser contada como declaração: as
 // duas situações pedem ações diferentes — corrigir a forma do arquivo, ou enumerar as
 // entradas que faltam — e colapsá-las numa só mensagem esconderia a causa real.
-function topoLegadoDeclaraPacote(lockfile) {
-  if (!Object.hasOwn(lockfile, "dependencies")) return false;
+function nomesDeclaradosNoTopoLegado(lockfile) {
+  if (!Object.hasOwn(lockfile, "dependencies")) return [];
   const colecao = lockfile.dependencies;
   if (colecao === null || typeof colecao !== "object" || Array.isArray(colecao)) {
     throw new Error("coleção de dependências legada inválida");
   }
-  return Object.keys(colecao).length > 0;
+  return Object.keys(colecao);
 }
 
-function lockfileEntries(lockfile) {
-  const packages = lockfile?.packages;
-  if (packages === null || typeof packages !== "object" || Array.isArray(packages)) {
-    throw new Error("lockfile sem `packages`; enumeração ausente não é aprovação");
-  }
-  const entries = Object.entries(packages).filter(([name]) => name !== "");
-  if (entries.length > 0) return entries;
+// A entrada que responde por uma dependência direta da raiz é sempre a instalação de
+// topo, `packages["node_modules/<nome>"]` — a mesma chave que `assertExpectativa`
+// localiza. O nome com escopo entra literalmente, porque é assim que o npm grava a
+// chave: `node_modules/@escopo/nome`.
+//
+// Formas aninhadas NÃO respondem: `node_modules/host/node_modules/<nome>` é outra
+// instalação, subordinada a outro pacote, e contá-la deixaria a dependência direta sem
+// versão fixada de topo. Presença é exigida aqui; a validade da entrada continua
+// provada pelo laço principal, que percorre TODA chave sob `node_modules/` e reprova
+// por classe própria — descritor inválido, origem não verificável, Git, registry ou
+// integridade. Nenhuma chave `node_modules/<nome>` escapa daquele laço, então
+// "enumerada" e "verificada" continuam sendo a mesma coisa.
+function chaveDeInstalacaoDeTopo(nome) {
+  return `node_modules/${nome}`;
+}
 
-  // Conjunto externo vazio tem duas causas possíveis, e só uma é legítima: o projeto
-  // não declara dependência alguma. A outra — a lista foi esvaziada enquanto o
-  // descritor raiz do próprio lockfile ainda declara pacotes — continua reprovando,
-  // porque aprovar seria aprovar o que não foi enumerado e, portanto, não foi
-  // verificado.
-  //
-  // A distinção é feita pelo que o PRÓPRIO lockfile declara. O manifesto não é lido
-  // aqui: sincronizar `package.json` e lockfile é responsabilidade de `npm ci`, e
-  // duplicá-la neste validador criaria uma segunda fonte de verdade.
+// Coerência entre o que a raiz declara e o que o lockfile enumera. Precisa valer com
+// QUALQUER conjunto externo, não só com o vazio: avaliá-la apenas quando não há
+// entrada alguma faria uma única chave de aparência legítima — um pacote de workspace,
+// que o laço pula por não estar sob `node_modules/` e não declarar `resolved` —
+// desligar a verificação inteira e aprovar um lockfile cujas dependências declaradas
+// não foram enumeradas nem, portanto, verificadas.
+//
+// A distinção é feita pelo que o PRÓPRIO lockfile declara. O manifesto não é lido
+// aqui: sincronizar `package.json` e lockfile é responsabilidade de `npm ci`, e
+// duplicá-la neste validador criaria uma segunda fonte de verdade.
+//
+// `optionalDependencies` entra junto das outras, deliberadamente. Uma dependência
+// opcional pode não ter sido instalada na plataforma que gerou o arquivo, e exigir a
+// entrada reprova esse caso legítimo — mas dispensá-la abriria um canal para esconder
+// qualquer dependência: bastaria declará-la como opcional para que nada precisasse ser
+// enumerado nem verificado. Entre recusar um lockfile incompleto e aprovar um lockfile
+// não verificado, a escolha é fail-closed. O caminho de correção é regenerar o arquivo
+// na plataforma alvo.
+function assertCoerenciaDeclaracaoEnumeracao(lockfile, packages) {
   if (!Object.hasOwn(packages, "")) {
     throw new Error("lockfile sem descritor da raiz");
   }
@@ -273,18 +291,32 @@ function lockfileEntries(lockfile) {
   if (raiz === null || typeof raiz !== "object" || Array.isArray(raiz)) {
     throw new Error("descritor da raiz inválido");
   }
-  const declara =
-    COLECOES_DE_DEPENDENCIA.some((campo) =>
-      colecaoDeclaraPacote(raiz, campo, "coleção de dependências inválida no descritor da raiz")
-    ) || topoLegadoDeclaraPacote(lockfile);
-  if (declara) {
-    throw new Error("lockfile declara dependências sem entradas enumeradas");
+  const declarados = [
+    ...COLECOES_DE_DEPENDENCIA.flatMap((campo) =>
+      nomesDeclaradosNaColecao(raiz, campo, "coleção de dependências inválida no descritor da raiz")
+    ),
+    ...nomesDeclaradosNoTopoLegado(lockfile)
+  ];
+  // A mensagem não distingue qual nome faltou: é nome de pacote do projeto examinado e
+  // não pode ir para o log público do gate.
+  for (const nome of declarados) {
+    if (!Object.hasOwn(packages, chaveDeInstalacaoDeTopo(nome))) {
+      throw new Error("lockfile declara dependências sem entradas enumeradas");
+    }
   }
+}
 
-  // Nenhuma dependência declarada e nenhuma enumerada: coerente. A verificação de
-  // `--expect` acontece depois e permanece fail-closed — expectativa alguma é
-  // satisfeita por um conjunto vazio.
-  return [];
+function lockfileEntries(lockfile) {
+  const packages = lockfile?.packages;
+  if (packages === null || typeof packages !== "object" || Array.isArray(packages)) {
+    throw new Error("lockfile sem `packages`; enumeração ausente não é aprovação");
+  }
+  assertCoerenciaDeclaracaoEnumeracao(lockfile, packages);
+
+  // Nada declarado sem entrada correspondente. A verificação de `--expect` acontece
+  // depois e permanece fail-closed — expectativa alguma é satisfeita por um conjunto
+  // que não contenha a entrada de topo exigida.
+  return Object.entries(packages).filter(([name]) => name !== "");
 }
 
 // Uma expectativa só é satisfeita por dependência externa real, localizada apenas em

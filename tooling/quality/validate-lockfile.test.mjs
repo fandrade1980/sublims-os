@@ -918,3 +918,238 @@ test("mensagens da coleção legada não ecoam conteúdo candidato", () => {
   const arrayComConteudo = run(comLegado([PACOTE_PRIVADO]));
   assertSemVazamento(arrayComConteudo);
 });
+
+// --- Fatia 5: coerência declara → enumera com conjunto externo NÃO vazio ---
+//
+// A coerência entre o que a raiz declara e o que o lockfile enumera não pode valer
+// só quando o conjunto externo é vazio. Se valesse, bastaria uma única chave de
+// aparência legítima — um pacote de workspace, que o laço de entradas pula por não
+// estar sob `node_modules/` e não declarar `resolved` — para desligar a verificação
+// inteira e aprovar um lockfile com dependências declaradas e nenhuma enumerada.
+//
+// A chave-isca é a mesma em todos os casos: presente, bem formada e legítima por si
+// só. O que muda é a coleção onde a dependência foi declarada.
+
+const CHAVE_ISCA = "packages/app";
+const DESCRITOR_ISCA = { name: "app" };
+
+function declaraComIsca(declaracoes, extras = {}) {
+  return escrever({
+    packages: {
+      "": { ...RAIZ_SEM_DEPENDENCIAS, ...declaracoes },
+      [CHAVE_ISCA]: DESCRITOR_ISCA,
+      ...extras
+    },
+    allowedRegistries: [REGISTRY_AUTORIZADO],
+    acceptedIntegrityAlgorithms: ALGORITMOS_ACEITOS
+  });
+}
+
+// Aprovação nunca pode ser o resultado: o vermelho desta fatia é exatamente "aprovou
+// lockfile incompleto", então a ausência da linha de aprovação é afirmada junto.
+function assertNaoAprovou(result) {
+  assert.doesNotMatch(result.stdout ?? "", /Lockfile válido/, "lockfile incompleto não pode ser aprovado");
+}
+
+test("cenário do reviewer: duas dependências declaradas, nenhuma enumerada, uma chave-isca", () => {
+  const result = run(declaraComIsca({ dependencies: { eslint: "10.10.0", "left-pad": "1.3.0" } }));
+  assertNaoAprovou(result);
+  assertRejeicaoDeDominio(result, /lockfile declara dependências sem entradas enumeradas/i);
+});
+
+for (const campo of ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"]) {
+  test(`\`${campo}\` declarado sem entrada enumerada reprova mesmo com conjunto externo não vazio`, () => {
+    const result = run(declaraComIsca({ [campo]: { [PACOTE_PRIVADO]: "1.0.0" } }));
+    assertNaoAprovou(result);
+    assertRejeicaoDeDominio(result, /lockfile declara dependências sem entradas enumeradas/i);
+    assertSemVazamento(result, ["1.0.0"]);
+  });
+}
+
+// A isca também pode ser uma entrada externa perfeitamente válida de outro pacote:
+// enumerar `b` não responde pela declaração de `a`.
+test("entrada externa válida de outro pacote não cobre a dependência declarada", () => {
+  const result = run(
+    declaraComIsca(
+      { dependencies: { [PACOTE_PRIVADO]: "1.0.0" } },
+      {
+        "node_modules/outro": {
+          version: "1.0.0",
+          resolved: `${REGISTRY_AUTORIZADO}outro/-/outro-1.0.0.tgz`,
+          integrity: `sha512-${DIGEST_SHA512_VALIDO}`
+        }
+      }
+    )
+  );
+  assertNaoAprovou(result);
+  assertRejeicaoDeDominio(result, /lockfile declara dependências sem entradas enumeradas/i);
+  assertSemVazamento(result, [DIGEST_SHA512_VALIDO]);
+});
+
+// Instalação aninhada é outra árvore: `node_modules/host/node_modules/<nome>` não é a
+// entrada de topo da dependência direta, pela mesma razão que não satisfaz `--expect`.
+test("entrada aninhada não satisfaz a declaração direta da raiz", () => {
+  const result = run(
+    declaraComIsca(
+      { dependencies: { eslint: "10.10.0" } },
+      {
+        "node_modules/host": {
+          version: "1.0.0",
+          resolved: `${REGISTRY_AUTORIZADO}host/-/host-1.0.0.tgz`,
+          integrity: `sha512-${DIGEST_SHA512_VALIDO}`
+        },
+        "node_modules/host/node_modules/eslint": {
+          version: "10.10.0",
+          resolved: `${REGISTRY_AUTORIZADO}eslint/-/eslint-10.10.0.tgz`,
+          integrity: `sha512-${DIGEST_ESLINT}`
+        }
+      }
+    )
+  );
+  assertNaoAprovou(result);
+  assertRejeicaoDeDominio(result, /lockfile declara dependências sem entradas enumeradas/i);
+});
+
+test("coleção legada no topo com conjunto externo não vazio também é verificada", () => {
+  const root = mkdtempSync(join(tmpdir(), "sublims-lockfile-"));
+  const lockfilePath = join(root, "package-lock.json");
+  const policyPath = join(root, "policy.json");
+  writeFileSync(
+    lockfilePath,
+    JSON.stringify({
+      name: "fixture",
+      version: "0.0.0",
+      lockfileVersion: 3,
+      requires: true,
+      packages: { "": RAIZ_SEM_DEPENDENCIAS, [CHAVE_ISCA]: DESCRITOR_ISCA },
+      dependencies: { [PACOTE_PRIVADO]: { version: "9.9.9" } }
+    })
+  );
+  writeFileSync(
+    policyPath,
+    JSON.stringify({
+      version: 2,
+      lockfile: {
+        allowedRegistries: [REGISTRY_AUTORIZADO],
+        acceptedIntegrityAlgorithms: ALGORITMOS_ACEITOS,
+        acceptedLockfileVersions: VERSOES_ACEITAS
+      }
+    })
+  );
+  const result = run({ lockfilePath, policyPath });
+  assertNaoAprovou(result);
+  assertRejeicaoDeDominio(result, /lockfile declara dependências sem entradas enumeradas/i);
+  assertSemVazamento(result, ["9.9.9"]);
+});
+
+// A mensagem desta classe não pode ganhar detalhe por passar a rodar sempre: nome do
+// pacote declarado, versão pedida e chave do lockfile continuam fora da saída.
+test("a recusa por enumeração incompleta não ecoa nome, versão nem chave", () => {
+  const result = run(
+    declaraComIsca({ devDependencies: { [`@${ORG_PRIVADA}/${PACOTE_PRIVADO}`]: "9.9.9" } })
+  );
+  assertRejeicaoDeDominio(result, /lockfile declara dependências sem entradas enumeradas/i);
+  assertSemVazamento(result, ["9.9.9", CHAVE_ISCA]);
+});
+
+// --- Fatia 5: controles positivos que não podem regredir ---
+
+test("chave-isca sozinha, sem dependência declarada, continua aprovando", () => {
+  const result = run(declaraComIsca({}));
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout ?? "", /0 dependências resolvidas por registry autorizado/);
+});
+
+test("dependência declarada e enumerada em node_modules/<nome> aprova, mesmo com workspace ao lado", () => {
+  const result = run(
+    declaraComIsca(
+      { dependencies: { eslint: "10.10.0" } },
+      {
+        "node_modules/eslint": {
+          version: "10.10.0",
+          resolved: `${REGISTRY_AUTORIZADO}eslint/-/eslint-10.10.0.tgz`,
+          integrity: `sha512-${DIGEST_ESLINT}`
+        }
+      }
+    )
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout ?? "", /1 dependências resolvidas por registry autorizado/);
+});
+
+// Pacote com escopo: a chave do npm grava o escopo literalmente, e a localização não
+// pode partir o nome no `/` do escopo.
+test("dependência com escopo é satisfeita por node_modules/@escopo/nome", () => {
+  const result = run(
+    declaraComIsca(
+      { devDependencies: { "@typescript-eslint/parser": "8.70.0" } },
+      {
+        "node_modules/@typescript-eslint/parser": {
+          version: "8.70.0",
+          resolved: `${REGISTRY_AUTORIZADO}@typescript-eslint/parser/-/parser-8.70.0.tgz`,
+          integrity: `sha512-${DIGEST_PARSER}`
+        }
+      }
+    )
+  );
+  assert.equal(result.status, 0, result.stderr);
+});
+
+// Workspace declarado como dependência da raiz: o par legítimo do npm é a entrada do
+// pacote mais `node_modules/<nome>` com `link: true`. O link continua enumerando a
+// dependência, continua dispensado de `resolved` de registry e de integridade, e
+// continua não satisfazendo `--expect`.
+test("workspace com link: true enumera a dependência declarada", () => {
+  const result = run(
+    escrever({
+      packages: {
+        "": { ...RAIZ_SEM_DEPENDENCIAS, dependencies: { interno: "1.0.0" } },
+        "pacotes/interno": { name: "interno", version: "1.0.0" },
+        "node_modules/interno": { resolved: "pacotes/interno", link: true }
+      },
+      allowedRegistries: [REGISTRY_AUTORIZADO],
+      acceptedIntegrityAlgorithms: ALGORITMOS_ACEITOS
+    })
+  );
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test("workspace enumerado por link não satisfaz --expect", () => {
+  const result = runComExpect(
+    escrever({
+      packages: {
+        "": { ...RAIZ_SEM_DEPENDENCIAS, dependencies: { interno: "1.0.0" } },
+        "pacotes/interno": { name: "interno", version: "1.0.0" },
+        "node_modules/interno": { resolved: "pacotes/interno", link: true }
+      },
+      allowedRegistries: [REGISTRY_AUTORIZADO],
+      acceptedIntegrityAlgorithms: ALGORITMOS_ACEITOS
+    }),
+    ["interno@1.0.0"]
+  );
+  assertRejeicaoDeDominio(result, /expectativa não satisfeita/i);
+});
+
+// Entrada presente porém inválida continua reprovando pela sua própria classe: a
+// coerência prova que a dependência foi enumerada, não que a entrada é aceitável.
+for (const { caso, entrada, padrao } of [
+  { caso: "sem `resolved`", entrada: { version: "1.0.0" }, padrao: /origem não verificável/i },
+  { caso: "descritor nulo", entrada: null, padrao: /descritor inválido/i },
+  {
+    caso: "registry não autorizado",
+    entrada: {
+      version: "1.0.0",
+      resolved: `${REGISTRY_NAO_AUTORIZADO}left-pad/-/left-pad-1.3.0.tgz`,
+      integrity: `sha512-${DIGEST_SHA512_VALIDO}`
+    },
+    padrao: /registry não autorizado/i
+  }
+]) {
+  test(`dependência declarada e enumerada com entrada inválida reprova por classe própria: ${caso}`, () => {
+    const result = run(
+      declaraComIsca({ dependencies: { "left-pad": "1.3.0" } }, { "node_modules/left-pad": entrada })
+    );
+    assertNaoAprovou(result);
+    assertRejeicaoDeDominio(result, padrao);
+  });
+}
