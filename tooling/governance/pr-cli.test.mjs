@@ -281,6 +281,117 @@ for (const [nome, caminho] of [
 }
 
 // ---------------------------------------------------------------------------------
+// Variação de caixa — a proibição não pode depender da grafia escolhida por quem
+// inclui o arquivo.
+//
+// A lista existe justamente contra a inclusão DELIBERADA via `git add -f`, cenário em
+// que o autor do PR escolhe a grafia. Em Windows e macOS o sistema de arquivos é
+// insensível a caixa: `.ENV` é o MESMO arquivo que o dotenv lê e `.NPMRC` o mesmo que
+// o npm lê. Em Linux o `.gitignore` também é sensível a caixa, de modo que `.ENV` não
+// é ignorado nem reprovado — as duas camadas da defesa dupla falham juntas.
+//
+// A comparação é feita sobre a forma minúscula do componente, e vale para todas as
+// famílias: ambiente, componente proibido, prefixo composto e o documento da raiz.
+// ---------------------------------------------------------------------------------
+for (const [nome, caminho] of [
+  ["documento da raiz em caixa alta", DOCUMENTO_DE_TRABALHO.toUpperCase()],
+  [".env em caixa alta", ".ENV"],
+  [".env de ambiente em caixa mista", ".Env.production"],
+  [".env aninhado em caixa mista", "apps/web/.ENV.local"],
+  ["npmrc em caixa alta", ".NPMRC"],
+  ["npmrc aninhado em caixa mista", "packages/app/.NpmRc"],
+  ["yarnrc em caixa alta", ".YARNRC"],
+  ["pgpass em caixa alta", ".PGPASS"],
+  ["chave ssh rsa em caixa alta", "ID_RSA"],
+  ["chave ssh ed25519 em caixa alta", "ID_ED25519"],
+  ["chave ssh rsa aninhada em caixa mista", "infra/Id_Rsa.bak"],
+  ["diretório de backups em caixa alta", "BACKUPS/arquivo"],
+  ["diretório de dumps em caixa alta", "DUMPS/arquivo"],
+  ["diretório de secrets em caixa alta", "SECRETS/arquivo"],
+  ["diretório de secrets em caixa mista", "Secrets/token.txt"],
+  ["arquivo secret em caixa alta", ".SECRET.valor"],
+  ["arquivo secret em caixa mista", "infra/deploy.Secret.json"],
+  ["credencial local do Claude em caixa alta", ".CLAUDE/settings.local.json"],
+  ["credencial local do Claude em caixa mista", "packages/app/.Claude/Settings.Local.json"],
+  // Material criptográfico já era insensível a caixa; os casos abaixo impedem que a
+  // unificação do mecanismo regrida essa família.
+  ["chave key em caixa alta", "certs/tls.KEY"],
+  ["chave pem em caixa mista", "deploy/server.Pem"],
+  ["dump em caixa alta", "db/producao.DUMP"],
+  ["sqlite em caixa mista", "data/app.SQLite3"]
+]) {
+  test(`rejeita variação de caixa: ${nome}`, () => {
+    const result = run(fixture({ changed: `src/example.ts\n${caminho}\n` }));
+    assert.notEqual(result.status, 0, result.stdout);
+    assert.match(result.stderr, /caminho proibido/i);
+  });
+}
+
+// A semântica por componente ancestral vale igualmente para a variação de caixa: o
+// nome proibido reprova como componente final E como diretório ancestral.
+for (const caminho of [
+  ".ENV/leia-me.md",
+  ".Env.production/config.json",
+  ".NPMRC/.env.example",
+  "SECRETS/config/valores.json",
+  "BACKUPS/2026-09-15/parte-01.tar",
+  "ID_RSA/copia.txt",
+  ".CLAUDE/settings.local.json/extra.json",
+  "certs/tls.KEY/leia-me.md"
+]) {
+  test(`rejeita descendente de componente proibido em caixa variante: ${caminho}`, () => {
+    const result = run(fixture({ changed: `src/example.ts\n${caminho}\n` }));
+    assert.notEqual(result.status, 0, result.stdout);
+    assert.match(result.stderr, /caminho proibido/i);
+  });
+}
+
+// Decisão sobre a variação de caixa da própria EXCEÇÃO.
+//
+// A correção alarga as proibições; alargar junto a exceção reabriria exatamente a
+// brecha que se fecha aqui, porque `.ENV.EXAMPLE` voltaria a ser um passe livre para a
+// família de ambiente em sistemas insensíveis a caixa. A exceção continua literal:
+// somente a grafia canônica `.env.example` é aceita. O custo de um falso positivo é
+// renomear o arquivo para a grafia canônica do repositório; o custo do contrário seria
+// publicar um `.env` real com outra grafia.
+for (const caminho of [".ENV.EXAMPLE", ".Env.Example", "apps/web/.ENV.example"]) {
+  test(`rejeita variação de caixa da exceção .env.example: ${caminho}`, () => {
+    const result = run(fixture({ changed: `src/example.ts\n${caminho}\n` }));
+    assert.notEqual(result.status, 0, result.stdout);
+    assert.match(result.stderr, /caminho proibido/i);
+  });
+}
+
+// A exceção canônica e os caminhos legítimos não regridem com a insensibilidade a
+// caixa: nomes que apenas CONTÊM um termo proibido continuam permitidos em qualquer
+// grafia.
+for (const [nome, caminho] of [
+  [".env.example canônico", ".env.example"],
+  [".env.example canônico aninhado", "apps/web/.env.example"],
+  ["componente com Env no meio do nome", "src/EnvironmentBanner.tsx"],
+  ["componente com Key no meio do nome", "src/KeyboardShortcuts.tsx"],
+  ["diretório parecido com Secrets", "src/SecretsPanel/page.tsx"],
+  ["diretório parecido com Backups", "apps/web/BackupsView/page.tsx"],
+  ["arquivo com Dumps no nome", "docs/DumpsGuide.md"]
+]) {
+  test(`aceita, apesar da insensibilidade a caixa: ${nome}`, () => {
+    const result = run(fixture({ changed: `src/example.ts\n${caminho}\n` }));
+    assert.equal(result.status, 0, result.stderr);
+  });
+}
+
+// A mensagem continua declarando classe e posição, sem ecoar a grafia escolhida.
+test("mensagem de caminho proibido em caixa variante não ecoa o caminho", () => {
+  const result = run(fixture({ changed: `src/example.ts\nSECRETS/${"SEGREDO_NAO_EXIBIR"}.TXT\n` }));
+  const saida = `${result.stdout}${result.stderr}`;
+  assert.notEqual(result.status, 0, saida);
+  assert.match(result.stderr, /caminho proibido/i);
+  assert.doesNotMatch(saida, /SEGREDO_NAO_EXIBIR/i, "caminho ecoado na saída");
+  assert.doesNotMatch(saida, /SECRETS/i, "componente proibido ecoado na saída");
+  assert.doesNotMatch(saida, /^\s+at\s/m, "stack trace na saída");
+});
+
+// ---------------------------------------------------------------------------------
 // Critérios 68 a 71 — tipo automatizado inferido de metadados confiáveis.
 //
 // Spec, Item 15, linha 184: "A classificação é inferida exclusivamente dos metadados

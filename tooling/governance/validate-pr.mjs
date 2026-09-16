@@ -30,9 +30,27 @@ function validateSpec(specPath) {
 // quando a lista de alterações contém caminho proibido. A enumeração acompanha
 // `.gitignore` linhas 6-8, 14 e 16-39.
 //
+// A lista existe contra a inclusão DELIBERADA, e nela quem escolhe a grafia é o autor
+// do PR. Comparar com sensibilidade a caixa entregaria a decisão ao atacante: `.ENV` e
+// `.NPMRC` são, em Windows e macOS, o MESMO arquivo que o dotenv e o npm leem; em Linux
+// o `.gitignore` também é sensível a caixa, de modo que `.ENV` não seria ignorado nem
+// reprovado e as duas camadas da defesa dupla falhariam juntas.
+//
+// Por isso a comparação acontece sempre sobre a forma minúscula, em UM único ponto:
+// este normalizador. Todos os padrões abaixo são escritos em minúsculas e dispensam a
+// flag `i`, e um padrão novo fica insensível a caixa por construção, sem depender de
+// alguém lembrar da flag.
+//
+// `toLowerCase` e não `toLocaleLowerCase`: a dobra precisa ser independente do locale
+// do runner, sob pena de o veredito do gate mudar conforme a máquina que o executa.
+function caixaNormalizada(valor) {
+  return valor.toLowerCase();
+}
+
 // Nome literal e ancorado na raiz, igual a `.gitignore:14`.
-const DOCUMENTO_DE_TRABALHO_DA_RAIZ =
-  "Prompt avançado — Engenharia reversa autorizada de plataforma SaaS.md";
+const DOCUMENTO_DE_TRABALHO_DA_RAIZ = caixaNormalizada(
+  "Prompt avançado — Engenharia reversa autorizada de plataforma SaaS.md"
+);
 
 // As regras se aplicam a CADA COMPONENTE do caminho, não apenas ao último.
 //
@@ -48,7 +66,7 @@ const AMBIENTE_PROIBIDO = [/^\.env$/u, /^\.env\./u];
 // Aplicadas a um componente isolado. Não admitem exceção alguma.
 const COMPONENTE_PROIBIDO = [
   // Chaves, certificados e material criptográfico.
-  /\.(pem|key|crt|p12|pfx)$/iu,
+  /\.(pem|key|crt|p12|pfx)$/u,
   /^id_rsa/u,
   /^id_ed25519/u,
   // Credenciais de ferramenta.
@@ -56,15 +74,21 @@ const COMPONENTE_PROIBIDO = [
   /^\.yarnrc$/u,
   /^\.pgpass$/u,
   // Dumps, bancos locais e backups.
-  /\.dump$/iu,
-  /\.sql\.gz$/iu,
-  /\.sqlite3?$/iu,
+  /\.dump$/u,
+  /\.sql\.gz$/u,
+  /\.sqlite3?$/u,
   /^(backups|dumps|secrets)$/u,
   /\.secret\./u
 ];
 
 // Regra de dois componentes, avaliada sobre cada prefixo do caminho.
 const PREFIXO_PROIBIDO = [/(^|\/)\.claude\/settings\.local\.json$/u];
+
+// A exceção é um ALLOWLIST, e por isso permanece literal: alargá-la para variações de
+// caixa reabriria a mesma brecha que a normalização fecha, porque `.ENV.EXAMPLE`
+// voltaria a ser um passe livre para a família de ambiente em sistema insensível a
+// caixa. Só a grafia canônica isenta; qualquer outra reprova e se corrige renomeando.
+const EXCECAO_DE_AMBIENTE = ".env.example";
 
 // O produtor atual é `git diff --name-only`, que aplica C-style quoting a caminhos com
 // bytes fora do ASCII imprimível: a entrada chega entre aspas e com escapes octais.
@@ -82,15 +106,17 @@ function nonCanonicalEntry(path) {
 }
 
 function forbiddenPath(path) {
-  if (path === DOCUMENTO_DE_TRABALHO_DA_RAIZ) return true;
+  if (caixaNormalizada(path) === DOCUMENTO_DE_TRABALHO_DA_RAIZ) return true;
 
   const componentes = path.split("/");
   for (let indice = 0; indice < componentes.length; indice += 1) {
-    const componente = componentes[indice];
+    // A dobra de caixa vale para o componente e para o prefixo acumulado. O separador
+    // `/` não é afetado, então a fatia continua sendo a mesma do caminho original.
+    const componente = caixaNormalizada(componentes[indice]);
 
     // Regra composta, sobre o prefixo acumulado até aqui. Assim
     // `.claude/settings.local.json` proíbe também seus descendentes.
-    const prefixo = componentes.slice(0, indice + 1).join("/");
+    const prefixo = componentes.slice(0, indice + 1).map(caixaNormalizada).join("/");
     if (PREFIXO_PROIBIDO.some((pattern) => pattern.test(prefixo))) return true;
 
     // As proibições sem exceção são avaliadas antes. Devolver "permitido" por causa do
@@ -101,7 +127,10 @@ function forbiddenPath(path) {
     // `.env.example` é o único arquivo de ambiente versionável, e a exceção vale
     // somente quando ele é o ARQUIVO FINAL. Como diretório — `.env.example/arquivo.txt`
     // — não isenta nada, e continua sujeito às regras de ambiente.
-    if (indice === componentes.length - 1 && componente === ".env.example") continue;
+    //
+    // A comparação usa o componente ORIGINAL: a exceção é literal, e `.ENV.EXAMPLE` cai
+    // nas regras de ambiente como qualquer outra grafia não canônica.
+    if (indice === componentes.length - 1 && componentes[indice] === EXCECAO_DE_AMBIENTE) continue;
     if (AMBIENTE_PROIBIDO.some((pattern) => pattern.test(componente))) return true;
   }
   return false;
