@@ -66,6 +66,59 @@ const ALVOS_POR_CLASSE = new Map([
   ["allowed-rebuild-added", Object.freeze(["allowedRebuilds"])]
 ]);
 
+// Conjuntos EXATOS de chaves dos objetos cuja forma é confiável, já em ordem
+// lexicográfica para comparar com `Object.keys(...).sort()`.
+//
+// Declarados literalmente, nunca derivados de qualquer um dos dois lados. Derivá-los da
+// base tornaria a comparação vácua para um campo que a base perdesse; derivá-los do
+// candidato deixaria o candidato escolher o que é examinado.
+//
+// Conjunto FECHADO nas duas direções: uma chave a mais é campo que o comparador não
+// sabe julgar, e uma chave a menos é campo que deixou de existir sem decisão. Os dois
+// reprovam. Acrescentar um campo à política exige, antes, acrescentar aqui a chave e no
+// comparador a regra que a julga — e é exatamente esse o custo pretendido.
+const CHAVES_DA_POLITICA = Object.freeze([
+  "allowedRebuilds",
+  "appliesWhenChanged",
+  "commands",
+  "complexity",
+  "coverage",
+  "dependencies",
+  "enabled",
+  "load",
+  "lockfile",
+  "reason",
+  "version"
+]);
+
+// Cinco chaves por comando, como a política real declara. Uma sexta — `shell`, `env`,
+// `cwd`, `timeoutMs`, `enabled` — muda o processo executado sem tocar em `executable`
+// nem em `args`, e a comparação por allowlist de propriedades não a veria.
+const CHAVES_DO_COMANDO = Object.freeze([
+  "args",
+  "executable",
+  "name",
+  "origin",
+  "toolPackages"
+]);
+
+const CHAVES_DE_COVERAGE = Object.freeze([
+  "branches",
+  "exclude",
+  "functions",
+  "include",
+  "lines",
+  "statements"
+]);
+const CHAVES_DE_COMPLEXITY = Object.freeze(["maxCyclomaticPerFunction"]);
+const CHAVES_DE_DEPENDENCIES = Object.freeze(["rules"]);
+const CHAVES_DE_LOAD = Object.freeze(["enabled", "productionTargetsAllowed", "reason"]);
+const CHAVES_DE_LOCKFILE = Object.freeze([
+  "acceptedIntegrityAlgorithms",
+  "acceptedLockfileVersions",
+  "allowedRegistries"
+]);
+
 // Nome de pacote npm em forma canônica, simples ou com escopo.
 //
 // PENDÊNCIA REGISTRADA: esta expressão é idêntica à de `validate-lockfile.mjs:32`, que
@@ -570,6 +623,12 @@ function assertQuantidadeDeComandos(trustedPolicy, candidatePolicy) {
       candidateCommand === null ||
       typeof candidateCommand !== "object" ||
       Array.isArray(candidateCommand) ||
+      // Conjunto exato nos DOIS lados, antes das propriedades individuais. A allowlist
+      // de propriedades enxergava só o que enumerava: uma chave introduzida pelo
+      // candidato atravessava intacta, e uma chave removida também. A comparação por
+      // conjunto encerra as duas direções de uma vez.
+      !possuiExatamenteAsChaves(trustedCommand, CHAVES_DO_COMANDO) ||
+      !possuiExatamenteAsChaves(candidateCommand, CHAVES_DO_COMANDO) ||
       typeof trustedCommand.name !== "string" ||
       typeof candidateCommand.name !== "string" ||
       trustedCommand.name !== candidateCommand.name ||
@@ -590,6 +649,163 @@ function assertQuantidadeDeComandos(trustedPolicy, candidatePolicy) {
       throw new Error("comandos da política candidata divergem da base confiável");
     }
   }
+}
+
+// ---------------------------------------------------------------------------------
+// Campos inegociáveis.
+//
+// Tudo o que não tem classe de exceção declarada em `ALVOS_POR_CLASSE` precisa ser
+// IDÊNTICO entre base e candidato. A alternativa que existia — não ler o campo — não é
+// "desautorizar": é não enxergar. O candidato que reduz `coverage.include` a um arquivo
+// trivial mantém os limiares intactos e passa a medi-los sobre quase nada, e o que
+// acrescenta um registry ou aceita `md5` muda a superfície de confiança do lockfile.
+//
+// Nenhum destes campos ganha classe de exceção, e `ALVOS_POR_CLASSE` permanece com as
+// seis classes originais: não existe afrouxamento autorizável deles. A única forma de
+// alterá-los é alterar a base confiável, sob revisão humana.
+//
+// As mensagens nomeiam a POSIÇÃO — sempre uma constante nossa — e a classe do problema.
+// Nenhum valor, padrão, registry, algoritmo, versão ou motivo é ecoado: o conteúdo da
+// política candidata é dado sob revisão e não pertence ao log de um gate.
+// ---------------------------------------------------------------------------------
+
+function ehObjetoSimples(valor) {
+  return valor !== null && typeof valor === "object" && !Array.isArray(valor);
+}
+
+function exigirObjetoComChaves(valor, esperadas, posicao) {
+  // Forma antes de chaves: `Object.keys(null)` lança, e um array tem chaves numéricas
+  // que nunca casariam o conjunto — as duas situações merecem a classe "forma".
+  if (!ehObjetoSimples(valor)) {
+    throw new Error("política com forma inválida");
+  }
+  if (!possuiExatamenteAsChaves(valor, esperadas)) {
+    throw new Error(`política com conjunto de chaves inválido em \`${posicao}\``);
+  }
+}
+
+// Texto exatamente como escrito: sem recorte e sem vazio. Espaço periférico tornaria
+// `" src/**"` e `"src/**"` dois nomes para a mesma coisa, e a igualdade textual
+// passaria a depender de qual grafia cada lado escolheu.
+function ehTextoNaoVazio(valor) {
+  return typeof valor === "string" && valor === valor.trim() && valor !== "";
+}
+
+function ehInteiroPositivo(valor) {
+  // `isSafeInteger` recusa fracionário, infinito, `NaN` e a faixa em que inteiros JSON
+  // distintos colapsam no mesmo número. `-0` não passa por `>= 1`.
+  return Number.isSafeInteger(valor) && valor >= 1;
+}
+
+function exigirEscalarIdentico(daBase, doCandidato, ehValido, posicao) {
+  if (!ehValido(daBase) || !ehValido(doCandidato)) {
+    throw new Error(`campo inegociável \`${posicao}\` com forma inválida`);
+  }
+  // `Object.is`, não `===`: `NaN` já foi recusado pelos predicados, e `-0` não pode
+  // passar por igual a `0`.
+  if (!Object.is(daBase, doCandidato)) {
+    throw new Error(`campo inegociável \`${posicao}\` diverge da base confiável`);
+  }
+}
+
+// Comparação POSICIONAL: sem ordenar, deduplicar ou normalizar. Ordenar tornaria
+// reordenação invisível, e reordenar `coverage.include` ou `acceptedLockfileVersions`
+// é uma alteração da política como qualquer outra.
+//
+// Coleção vazia reprova por forma nos dois lados, ainda que iguais. Enumeração vazia
+// nunca é aprovação: uma lista vazia de padrões medidos, de regras de dependência, de
+// registries ou de algoritmos aceitos esvaziaria o controle em vez de aplicá-lo.
+function exigirListaIdentica(daBase, doCandidato, ehItemValido, posicao) {
+  for (const lista of [daBase, doCandidato]) {
+    if (!Array.isArray(lista) || lista.length === 0 || !lista.every(ehItemValido)) {
+      throw new Error(`campo inegociável \`${posicao}\` com forma inválida`);
+    }
+  }
+  if (
+    daBase.length !== doCandidato.length ||
+    daBase.some((item, indice) => !Object.is(item, doCandidato[indice]))
+  ) {
+    throw new Error(`campo inegociável \`${posicao}\` diverge da base confiável`);
+  }
+}
+
+function compararCamposInegociaveis(trustedPolicy, candidatePolicy) {
+  // A forma é exigida das DUAS políticas. Exigi-la só do candidato deixaria uma base
+  // degradada comandar a comparação: sem `lockfile` na base, a ausência no candidato
+  // viraria igualdade.
+  for (const politica of [trustedPolicy, candidatePolicy]) {
+    exigirObjetoComChaves(politica, CHAVES_DA_POLITICA, "raiz");
+    exigirObjetoComChaves(politica.coverage, CHAVES_DE_COVERAGE, "coverage");
+    exigirObjetoComChaves(politica.complexity, CHAVES_DE_COMPLEXITY, "complexity");
+    exigirObjetoComChaves(politica.dependencies, CHAVES_DE_DEPENDENCIES, "dependencies");
+    exigirObjetoComChaves(politica.load, CHAVES_DE_LOAD, "load");
+    exigirObjetoComChaves(politica.lockfile, CHAVES_DE_LOCKFILE, "lockfile");
+    // `reason` da raiz é prosa editorial e não decide nada: exige-se que exista e seja
+    // texto, não que seja idêntico. Comparar a redação transformaria uma correção de
+    // português em reprovação, sem ganho de controle. `load.reason` é diferente e É
+    // comparado: ele acompanha `load.enabled` e `load.productionTargetsAllowed`, e a
+    // decisão de carga é declarada pelos três juntos.
+    if (!ehTextoNaoVazio(politica.reason)) {
+      throw new Error("campo inegociável `reason` com forma inválida");
+    }
+  }
+
+  exigirEscalarIdentico(trustedPolicy.version, candidatePolicy.version, ehInteiroPositivo, "version");
+
+  // Universo medido. Reduzi-lo a um arquivo trivial mantém os limiares idênticos e os
+  // faz medir quase nada — o afrouxamento mais grave que a comparação anterior deixava
+  // passar sem sinal algum.
+  exigirListaIdentica(
+    trustedPolicy.coverage.include,
+    candidatePolicy.coverage.include,
+    ehTextoNaoVazio,
+    "coverage.include"
+  );
+
+  exigirListaIdentica(
+    trustedPolicy.dependencies.rules,
+    candidatePolicy.dependencies.rules,
+    ehTextoNaoVazio,
+    "dependencies.rules"
+  );
+
+  exigirEscalarIdentico(
+    trustedPolicy.load.enabled,
+    candidatePolicy.load.enabled,
+    (valor) => typeof valor === "boolean",
+    "load.enabled"
+  );
+  exigirEscalarIdentico(
+    trustedPolicy.load.productionTargetsAllowed,
+    candidatePolicy.load.productionTargetsAllowed,
+    (valor) => typeof valor === "boolean",
+    "load.productionTargetsAllowed"
+  );
+  exigirEscalarIdentico(
+    trustedPolicy.load.reason,
+    candidatePolicy.load.reason,
+    ehTextoNaoVazio,
+    "load.reason"
+  );
+
+  exigirListaIdentica(
+    trustedPolicy.lockfile.allowedRegistries,
+    candidatePolicy.lockfile.allowedRegistries,
+    ehTextoNaoVazio,
+    "lockfile.allowedRegistries"
+  );
+  exigirListaIdentica(
+    trustedPolicy.lockfile.acceptedIntegrityAlgorithms,
+    candidatePolicy.lockfile.acceptedIntegrityAlgorithms,
+    ehTextoNaoVazio,
+    "lockfile.acceptedIntegrityAlgorithms"
+  );
+  exigirListaIdentica(
+    trustedPolicy.lockfile.acceptedLockfileVersions,
+    candidatePolicy.lockfile.acceptedLockfileVersions,
+    ehInteiroPositivo,
+    "lockfile.acceptedLockfileVersions"
+  );
 }
 
 function exigirAutorizacao(registro, changeClass, target, valorObservado) {
@@ -724,6 +940,10 @@ try {
   const trustedPolicy = carregarPolitica(options.get("--trusted"), "confiável");
   const candidatePolicy = carregarPolitica(options.get("--candidate"), "candidata");
   assertQuantidadeDeComandos(trustedPolicy, candidatePolicy);
+  // Antes das comparações com classe de exceção: a forma e os campos inegociáveis
+  // delimitam o que as demais comparações leem. Um `coverage.include` encolhido
+  // tornaria os limiares comparados adiante uma medição sobre quase nada.
+  compararCamposInegociaveis(trustedPolicy, candidatePolicy);
   compararEnabled(trustedPolicy, candidatePolicy, registro);
   compararLimiaresDeCobertura(trustedPolicy, candidatePolicy, registro);
   compararComplexidade(trustedPolicy, candidatePolicy, registro);

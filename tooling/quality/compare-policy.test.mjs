@@ -97,8 +97,31 @@ function politicaPadrao() {
       exclude: []
     },
     complexity: { maxCyclomaticPerFunction: 10 },
+    // `reason`, `dependencies`, `load` e `lockfile` espelham a política real. A fixture
+    // anterior os omitia, e a omissão não era neutra: o comparador não lia campo algum
+    // deles, e nenhum teste podia observar a omissão. Declará-los aqui é o que torna
+    // possível exercitar a comparação desses campos pelo seam real.
+    reason: "Fixture: motivo declarado como na política real.",
+    dependencies: {
+      rules: [
+        "domain-not-to-ui",
+        "domain-not-to-infrastructure",
+        "module-not-to-foreign-adapters",
+        "integrations-only-to-module-seam"
+      ]
+    },
+    load: {
+      enabled: false,
+      reason: "Fixture: carga aguardando cenário aprovado.",
+      productionTargetsAllowed: false
+    },
     appliesWhenChanged: ["src/**", "package.json"],
-    allowedRebuilds: []
+    allowedRebuilds: [],
+    lockfile: {
+      allowedRegistries: ["https://registry.npmjs.org/"],
+      acceptedIntegrityAlgorithms: ["sha512"],
+      acceptedLockfileVersions: [3]
+    }
   };
 }
 
@@ -2438,5 +2461,411 @@ for (const [nome, alterar] of [
       return policy;
     });
     assertReprovaInterface(result, /política com forma inválida/i);
+  });
+}
+
+// ---------------------------------------------------------------------------------
+// Campos inegociáveis: tudo o que não tem classe de exceção declarada.
+//
+// A comparação anterior lia seis campos e ignorava o resto do arquivo. Um campo não
+// lido não é "desautorizado": ele é INVISÍVEL. O candidato que reduz `coverage.include`
+// a um arquivo trivial mantém os limiares intactos e passa a medi-los sobre quase
+// nada; o que acrescenta um registry a `lockfile.allowedRegistries` ou `md5` a
+// `acceptedIntegrityAlgorithms` muda a superfície de confiança sem que o comparador
+// mencione `lockfile` uma única vez.
+//
+// Estes campos não ganham classe de exceção: não existe afrouxamento autorizável
+// deles. Qualquer diferença reprova, e a única forma de alterá-los é alterar a base.
+// ---------------------------------------------------------------------------------
+
+// Altera as DUAS raízes com a mesma transformação. Necessário para os casos de forma
+// inválida simétrica — coleção vazia dos dois lados, por exemplo — em que a divergência
+// não existe e o que está sob exame é a recusa da forma.
+function executarComPoliticaNasDuasRaizes(prefixo, alterar, exceptions = []) {
+  const trusted = novaRaiz(`trusted-${prefixo}`);
+  const candidate = novaRaiz(`candidate-${prefixo}`);
+  escrever(trusted, "quality/policy-exceptions.json", registroCom(exceptions));
+  escreverPolitica(trusted, alterar);
+  escreverPolitica(candidate, alterar);
+  return executar(trusted, candidate);
+}
+
+// Uma chave a mais em um comando é, por construção, introdução do candidato: a política
+// real declara exatamente cinco por comando. `shell`, `env` e `cwd` mudam o processo
+// executado sem tocar em `executable` ou `args`; `timeoutMs` e `enabled` mudam se e por
+// quanto tempo o comando roda. Nenhuma delas era vista pela allowlist de propriedades.
+for (const [nome, chave, valor] of [
+  ["shell", "shell", true],
+  ["env", "env", { NODE_OPTIONS: "--require=./patch.js" }],
+  ["cwd", "cwd", "./outra-raiz"],
+  ["timeoutMs", "timeoutMs", 1],
+  ["enabled", "enabled", false]
+]) {
+  test(`chave ${nome} acrescentada a um comando reprova`, () => {
+    const result = executarComPoliticas(`comando-chave-extra-${nome}`, (policy) => {
+      policy.commands[0][chave] = valor;
+      return policy;
+    });
+    assertReprovaInterface(result, /comandos da política candidata divergem da base confiável/i);
+  });
+}
+
+test("chave extra em comando não ecoa o valor introduzido", () => {
+  const result = executarComPoliticas("comando-chave-extra-marcador", (policy) => {
+    policy.commands[0].env = { SEGREDO: MARCADOR };
+    return policy;
+  });
+  assertReprovaInterface(result, /comandos da política candidata divergem da base confiável/i);
+});
+
+for (const chave of ["name", "executable", "origin", "args", "toolPackages"]) {
+  test(`remover a chave ${chave} de um comando reprova`, () => {
+    const result = executarComPoliticas(`comando-chave-ausente-${chave}`, (policy) => {
+      delete policy.commands[0][chave];
+      return policy;
+    });
+    assertReprovaInterface(result, /comandos da política candidata divergem da base confiável/i);
+  });
+}
+
+const PADRAO_CHAVES_DA_POLITICA = (posicao) =>
+  new RegExp(`política com conjunto de chaves inválido em \`${posicao}\``, "iu");
+
+const PADRAO_DIVERGENCIA = (campo) =>
+  new RegExp(`campo inegociável \`${campo.replaceAll(".", "\\.")}\` diverge da base confiável`, "iu");
+
+const PADRAO_FORMA_DO_CAMPO = (campo) =>
+  new RegExp(`campo inegociável \`${campo.replaceAll(".", "\\.")}\` com forma inválida`, "iu");
+
+test("remover coverage.include reprova", () => {
+  const result = executarComPoliticas("coverage-include-removido", (policy) => {
+    delete policy.coverage.include;
+    return policy;
+  });
+  assertReprovaInterface(result, PADRAO_CHAVES_DA_POLITICA("coverage"));
+});
+
+// O cenário mais grave: os limiares comparados continuam idênticos e passam a medir
+// quase nada, porque o universo medido encolheu.
+for (const [nome, alterar] of [
+  ["redução a um arquivo trivial", (include) => include.splice(0, include.length, "src/trivial.ts")],
+  ["substituição", (include) => include.splice(0, 1, `src/${MARCADOR}/**`)],
+  ["reordenação", (include) => include.reverse()],
+  ["remoção de um padrão", (include) => include.pop()],
+  ["acréscimo de um padrão", (include) => include.push("src/extra/**")]
+]) {
+  test(`${nome} em coverage.include reprova`, () => {
+    const result = executarComPoliticas(
+      `coverage-include-${nome.replaceAll(/\s+/gu, "-")}`,
+      (policy) => {
+        alterar(policy.coverage.include);
+        return policy;
+      }
+    );
+    assertReprovaInterface(result, PADRAO_DIVERGENCIA("coverage.include"));
+  });
+}
+
+// Esvaziar só o candidato é, ao mesmo tempo, divergência e coleção vazia. A forma é
+// apurada primeiro: uma lista vazia é inválida em qualquer dos lados, e reportá-la como
+// mera divergência sugeriria que bastaria alinhar a base para resolver.
+test("esvaziar coverage.include no candidato reprova por forma", () => {
+  const result = executarComPoliticas("coverage-include-esvaziado", (policy) => {
+    policy.coverage.include = [];
+    return policy;
+  });
+  assertReprovaInterface(result, PADRAO_FORMA_DO_CAMPO("coverage.include"));
+});
+
+// Enumeração vazia nunca é aprovação: mesmo idêntica dos dois lados, a coleção vazia
+// reprova por forma. Do contrário, esvaziar a base tornaria a comparação vácua.
+test("coverage.include vazia nas duas raízes reprova por forma", () => {
+  const result = executarComPoliticaNasDuasRaizes("coverage-include-vazio-duplo", (policy) => {
+    policy.coverage.include = [];
+    return policy;
+  });
+  assertReprovaInterface(result, PADRAO_FORMA_DO_CAMPO("coverage.include"));
+});
+
+for (const [nome, valor] of [
+  ["texto", "src/**"],
+  ["objeto", { padrao: "src/**" }],
+  ["lista com não-texto", ["src/**", 7]],
+  ["lista com texto vazio", ["src/**", ""]],
+  ["lista com espaço periférico", ["src/**", " src/shared/** "]],
+  ["nulo", null]
+]) {
+  test(`coverage.include como ${nome} reprova por forma`, () => {
+    const result = executarComPoliticaNasDuasRaizes(
+      `coverage-include-forma-${nome.replaceAll(/\s+/gu, "-")}`,
+      (policy) => {
+        policy.coverage.include = valor;
+        return policy;
+      }
+    );
+    assertReprovaInterface(result, PADRAO_FORMA_DO_CAMPO("coverage.include"));
+  });
+}
+
+for (const [nome, alterar] of [
+  ["remover uma regra", (rules) => rules.pop()],
+  ["acrescentar uma regra", (rules) => rules.push(`regra-${MARCADOR}`)],
+  ["reordenar as regras", (rules) => rules.reverse()],
+  ["substituir uma regra", (rules) => rules.splice(0, 1, "domain-pode-ui")]
+]) {
+  test(`${nome} de dependencies.rules reprova`, () => {
+    const result = executarComPoliticas(
+      `dependencies-rules-${nome.replaceAll(/\s+/gu, "-")}`,
+      (policy) => {
+        alterar(policy.dependencies.rules);
+        return policy;
+      }
+    );
+    assertReprovaInterface(result, PADRAO_DIVERGENCIA("dependencies.rules"));
+  });
+}
+
+test("esvaziar dependencies.rules nas duas raízes reprova por forma", () => {
+  const result = executarComPoliticaNasDuasRaizes("dependencies-rules-vazio", (policy) => {
+    policy.dependencies.rules = [];
+    return policy;
+  });
+  assertReprovaInterface(result, PADRAO_FORMA_DO_CAMPO("dependencies.rules"));
+});
+
+test("remover dependencies reprova", () => {
+  const result = executarComPoliticas("dependencies-removido", (policy) => {
+    delete policy.dependencies;
+    return policy;
+  });
+  assertReprovaInterface(result, PADRAO_CHAVES_DA_POLITICA("raiz"));
+});
+
+for (const [campo, nome, alterar] of [
+  [
+    "lockfile.allowedRegistries",
+    "acrescentar um registry",
+    (lockfile) => lockfile.allowedRegistries.push(`https://${MARCADOR}.example.com/`)
+  ],
+  [
+    "lockfile.allowedRegistries",
+    "substituir o registry",
+    (lockfile) => lockfile.allowedRegistries.splice(0, 1, "https://espelho.example.com/")
+  ],
+  [
+    "lockfile.acceptedIntegrityAlgorithms",
+    "acrescentar md5",
+    (lockfile) => lockfile.acceptedIntegrityAlgorithms.push("md5")
+  ],
+  [
+    "lockfile.acceptedIntegrityAlgorithms",
+    "substituir por sha1",
+    (lockfile) => lockfile.acceptedIntegrityAlgorithms.splice(0, 1, "sha1")
+  ],
+  [
+    "lockfile.acceptedLockfileVersions",
+    "acrescentar a versão 1",
+    (lockfile) => lockfile.acceptedLockfileVersions.push(1)
+  ],
+  [
+    "lockfile.acceptedLockfileVersions",
+    "substituir a versão aceita",
+    (lockfile) => lockfile.acceptedLockfileVersions.splice(0, 1, 2)
+  ]
+]) {
+  test(`${nome} em ${campo} reprova`, () => {
+    const result = executarComPoliticas(
+      `lockfile-${nome.replaceAll(/\s+/gu, "-")}`,
+      (policy) => {
+        alterar(policy.lockfile);
+        return policy;
+      }
+    );
+    assertReprovaInterface(result, PADRAO_DIVERGENCIA(campo));
+  });
+}
+
+for (const campo of [
+  "allowedRegistries",
+  "acceptedIntegrityAlgorithms",
+  "acceptedLockfileVersions"
+]) {
+  test(`esvaziar lockfile.${campo} nas duas raízes reprova por forma`, () => {
+    const result = executarComPoliticaNasDuasRaizes(`lockfile-vazio-${campo}`, (policy) => {
+      policy.lockfile[campo] = [];
+      return policy;
+    });
+    assertReprovaInterface(result, PADRAO_FORMA_DO_CAMPO(`lockfile.${campo}`));
+  });
+}
+
+test("versão de lockfile não inteira reprova por forma", () => {
+  const result = executarComPoliticaNasDuasRaizes("lockfile-versao-fracionaria", (policy) => {
+    policy.lockfile.acceptedLockfileVersions = [3.5];
+    return policy;
+  });
+  assertReprovaInterface(result, PADRAO_FORMA_DO_CAMPO("lockfile.acceptedLockfileVersions"));
+});
+
+test("versão de lockfile textual reprova por forma", () => {
+  const result = executarComPoliticaNasDuasRaizes("lockfile-versao-textual", (policy) => {
+    policy.lockfile.acceptedLockfileVersions = ["3"];
+    return policy;
+  });
+  assertReprovaInterface(result, PADRAO_FORMA_DO_CAMPO("lockfile.acceptedLockfileVersions"));
+});
+
+test("remover lockfile reprova", () => {
+  const result = executarComPoliticas("lockfile-removido", (policy) => {
+    delete policy.lockfile;
+    return policy;
+  });
+  assertReprovaInterface(result, PADRAO_CHAVES_DA_POLITICA("raiz"));
+});
+
+for (const [campo, valor] of [
+  ["enabled", true],
+  ["productionTargetsAllowed", true],
+  ["reason", `Motivo trocado ${MARCADOR}`]
+]) {
+  test(`alterar load.${campo} reprova`, () => {
+    const result = executarComPoliticas(`load-${campo}`, (policy) => {
+      policy.load[campo] = valor;
+      return policy;
+    });
+    assertReprovaInterface(result, PADRAO_DIVERGENCIA(`load.${campo}`));
+  });
+}
+
+for (const [campo, valor] of [
+  ["enabled", "false"],
+  ["productionTargetsAllowed", 0],
+  ["reason", ""]
+]) {
+  test(`load.${campo} com tipo errado nas duas raízes reprova por forma`, () => {
+    const result = executarComPoliticaNasDuasRaizes(`load-forma-${campo}`, (policy) => {
+      policy.load[campo] = valor;
+      return policy;
+    });
+    assertReprovaInterface(result, PADRAO_FORMA_DO_CAMPO(`load.${campo}`));
+  });
+}
+
+test("remover load reprova", () => {
+  const result = executarComPoliticas("load-removido", (policy) => {
+    delete policy.load;
+    return policy;
+  });
+  assertReprovaInterface(result, PADRAO_CHAVES_DA_POLITICA("raiz"));
+});
+
+test("version divergente entre base e candidato reprova", () => {
+  const result = executarComPoliticas("version-divergente", (policy) => {
+    policy.version = 3;
+    return policy;
+  });
+  assertReprovaInterface(result, PADRAO_DIVERGENCIA("version"));
+});
+
+test("version textual nas duas raízes reprova por forma", () => {
+  const result = executarComPoliticaNasDuasRaizes("version-textual", (policy) => {
+    policy.version = "2";
+    return policy;
+  });
+  assertReprovaInterface(result, PADRAO_FORMA_DO_CAMPO("version"));
+});
+
+test("remover version reprova", () => {
+  const result = executarComPoliticas("version-removida", (policy) => {
+    delete policy.version;
+    return policy;
+  });
+  assertReprovaInterface(result, PADRAO_CHAVES_DA_POLITICA("raiz"));
+});
+
+// Chave desconhecida em cada objeto cuja forma é confiável. O conjunto é fechado: um
+// campo novo precisa de regra explícita no comparador antes de existir na política.
+for (const [posicao, alterar] of [
+  ["raiz", (policy) => (policy[`extra-${MARCADOR}`] = true)],
+  ["coverage", (policy) => (policy.coverage.perFile = 100)],
+  ["complexity", (policy) => (policy.complexity.maxDepth = 12)],
+  ["dependencies", (policy) => (policy.dependencies.ignore = ["src/**"])],
+  ["load", (policy) => (policy.load.targets = ["https://exemplo.invalid/"])],
+  ["lockfile", (policy) => (policy.lockfile.allowUnknownIntegrity = true)]
+]) {
+  test(`chave desconhecida em ${posicao} reprova`, () => {
+    const result = executarComPoliticas(`chave-desconhecida-${posicao}`, (policy) => {
+      alterar(policy);
+      return policy;
+    });
+    assertReprovaInterface(result, PADRAO_CHAVES_DA_POLITICA(posicao));
+  });
+}
+
+for (const [posicao, alterar] of [
+  ["coverage", (policy) => (policy.coverage = [])],
+  ["complexity", (policy) => (policy.complexity = null)],
+  ["dependencies", (policy) => (policy.dependencies = "domain-not-to-ui")],
+  ["load", (policy) => (policy.load = false)],
+  ["lockfile", (policy) => (policy.lockfile = ["https://registry.npmjs.org/"])]
+]) {
+  test(`${posicao} que não é objeto simples reprova`, () => {
+    const result = executarComPoliticas(`nao-objeto-${posicao}`, (policy) => {
+      alterar(policy);
+      return policy;
+    });
+    assertReprovaInterface(result, /política com forma inválida/i);
+  });
+}
+
+// A comparação exata não pode transformar igualdade em reprovação: as duas raízes com a
+// mesma política continuam aprovando, com todos os campos novos presentes.
+test("políticas idênticas com todos os campos inegociáveis são aprovadas", () => {
+  const trusted = novaRaiz("trusted-inegociaveis-iguais");
+  const candidate = novaRaiz("candidate-inegociaveis-iguais");
+  escrever(trusted, "quality/policy-exceptions.json", registroCom([]));
+  const result = executar(trusted, candidate);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /^Política candidata compatível com a política confiável\.\n$/u);
+});
+
+// Ordem editorial das chaves não é semântica: o candidato que apenas reescreve o
+// arquivo com outra ordem continua idêntico.
+test("mesma política com chaves em outra ordem é aprovada", () => {
+  const trusted = novaRaiz("trusted-ordem-de-chaves");
+  const candidate = novaRaiz("candidate-ordem-de-chaves");
+  escrever(trusted, "quality/policy-exceptions.json", registroCom([]));
+  const policy = politicaPadrao();
+  const reordenada = Object.fromEntries(Object.entries(policy).reverse());
+  escrever(candidate, "quality/policy.json", JSON.stringify(reordenada));
+  const result = executar(trusted, candidate);
+  assert.equal(result.status, 0, result.stderr);
+});
+
+// Nenhum dos campos inegociáveis ganha classe de exceção: um registro que tente
+// autorizá-los cai em classe desconhecida, como qualquer outro alvo não excetuável.
+for (const [nome, changeClass, target] of [
+  ["coverage.include", "coverage-include-reduced", "coverage.include"],
+  ["lockfile.allowedRegistries", "allowed-registry-added", "lockfile.allowedRegistries"],
+  ["load.enabled", "load-enabled", "load.enabled"]
+]) {
+  test(`registro não pode declarar classe para ${nome}`, () => {
+    const trusted = novaRaiz(`trusted-sem-classe-${changeClass}`);
+    const candidate = novaRaiz(`candidate-sem-classe-${changeClass}`);
+    escrever(
+      trusted,
+      "quality/policy-exceptions.json",
+      registroCom([
+        {
+          ...ENTRADA_ESTRUTURAL,
+          id: "tentativa",
+          changeClass,
+          target,
+          value: "src/**"
+        }
+      ])
+    );
+    const result = executar(trusted, candidate);
+    assertReprovaInterface(result, /`changeClass` desconhecida/iu);
   });
 }
