@@ -133,14 +133,40 @@ function globMatches(pattern, path) {
   return new RegExp(`^${source}$`, "u").test(path);
 }
 
+function literalStrings(content) {
+  if (typeof content !== "string") return null;
+  const values = [];
+  const literal = /(["'])((?:\\.|(?!\1)[^\\])*)\1/gu;
+  for (const item of content.matchAll(literal)) values.push(item[2]);
+  const residue = content.replace(literal, "").replace(/[\s,]/gu, "");
+  return residue === "" ? values : null;
+}
+
+const IGNORES_KEY = /(?:\[\s*(["'])ignores\1\s*\]|(["'])ignores\2|\bignores\b)\s*:/gu;
+
+function significantIndex(source, from) {
+  let index = from;
+  while (index < source.length && /\s/u.test(source[index])) index += 1;
+  return index;
+}
+
+function assertIgnores(eslint) {
+  const protectedPaths = ["src/__candidate__.ts", "src/modules/__candidate__.ts", "src/shared/__candidate__.ts"];
+  for (const match of eslint.matchAll(IGNORES_KEY)) {
+    const start = significantIndex(eslint, match.index + match[0].length);
+    if (eslint[start] !== "[") throw new Error("lista de padrões ignorados não é um array literal");
+    const patterns = literalStrings(balancedContent(eslint, start, "[", "]"));
+    if (patterns === null) throw new Error("lista de padrões ignorados ilegível ou não textual");
+    if (patterns.some((pattern) => protectedPaths.some((path) => globMatches(pattern, path)))) {
+      throw new Error("ignorar src é proibido");
+    }
+  }
+}
+
 function assertLint(eslint, policy) {
   eslint = exportedConfig(withoutComments(eslint));
   if (eslint === null) throw new Error("regra de complexidade incompatível com a política");
-  const ignored = [...eslint.matchAll(/\bignores\s*:\s*\[([\s\S]*?)\]/gu)]
-    .flatMap((match) => [...match[1].matchAll(/["']([^"']*)["']/gu)].map((value) => value[1]));
-  if (ignored.some((pattern) => globMatches(pattern, "src/__candidate__.ts"))) {
-    throw new Error("ignorar src é proibido");
-  }
+  assertIgnores(eslint);
   const max = policy?.complexity?.maxCyclomaticPerFunction;
   const occurrences = [...eslint.matchAll(/\bcomplexity\s*:/gu)];
   const configured = [

@@ -349,3 +349,188 @@ for (const [nome, ancora, vitest] of AMBIGUOS) {
     assertAmbiguidade(run(fx), ancora, fx, vitest);
   });
 }
+
+// --- Arrays "ignores" do ESLint: a delimitação precisa ser sensível a aspas.
+// Um "]" dentro de uma string é bracket expression legítima de glob e não pode
+// encerrar o array inspecionado. Todos os arrays "ignores" do arquivo precisam
+// ser lidos, porque flat config admite vários blocos.
+
+const REGRAS_LINT = 'rules: { complexity: ["error", { max: 10, variant: "classic" }] }';
+
+function eslintComIgnores(...listas) {
+  const blocos = listas.map((lista, indice) =>
+    indice === 0
+      ? `{ ignores: [${lista}], files: ["src/**/*.ts"], ${REGRAS_LINT} }`
+      : `{ ignores: [${lista}] }`
+  );
+  return `export default [\n  ${blocos.join(",\n  ")}\n];\n`;
+}
+
+function assertReprova(result, padrao) {
+  assert.notEqual(result.status, 0, "configuração foi aprovada indevidamente");
+  assert.doesNotMatch(result.stdout, /compatível com a política confiável/u, "linha de aprovação foi emitida");
+  assert.match(result.stderr, padrao);
+  assert.doesNotMatch(`${result.stdout}${result.stderr}`, /\n\s+at\s/u);
+}
+
+function assertSemVazamento(result, fx, eslint) {
+  assert.ok(!result.stderr.includes(fx.candidate), "mensagem vazou o caminho da candidata");
+  for (const trecho of ["src/**", "src/modules/**", "src/shared/**", "**/*.[]]", "docs/", "ignores", "complexity"]) {
+    assert.ok(!result.stderr.includes(trecho), `mensagem vazou conteúdo inspecionado: ${trecho}`);
+  }
+  for (const linha of eslint.split("\n")) {
+    const texto = linha.trim();
+    if (texto.length > 8) assert.ok(!result.stderr.includes(texto), "mensagem ecoou trecho da candidata");
+  }
+}
+
+const IGNORES_QUE_ALCANCAM_SRC = [
+  ["vetor exato: colchete dentro de string antes de src", ['"**/*.[]]", "src/**"']],
+  ["colchete de fechamento em glob antes de src", ['"docs/a]b/**", "src/**"']],
+  ["colchete escapado dentro de string", ['"**/*.[\\]]", "src/**"']],
+  ["colchetes combinados dentro de string", ['"[[]]", "[]]", "src/**"']],
+  ["primeiro array seguro e segundo alcança src", ['"docs/**"', '"**/*.[]]", "src/**"']],
+  ["violação em posição intermediária", ['"docs/**"', '"**/*.[]]", "src/**"', '"build/**"']],
+  ["violação em posição final", ['"docs/**"', '"build/**"', '"**/*.[]]", "src/**"']],
+  ["alcança src/modules", ['"src/modules/**"']],
+  ["alcança src/shared", ['"src/shared/**"']],
+  ["alcança src/modules em array posterior", ['"docs/**"', '"src/modules/**"']]
+];
+
+for (const [nome, listas] of IGNORES_QUE_ALCANCAM_SRC) {
+  test(`recusa ignore de lint que alcança src — ${nome}`, () => {
+    const eslint = eslintComIgnores(...listas);
+    const fx = fixture({ eslint });
+    const result = run(fx);
+    assertReprova(result, /Configuração candidata reprovada: ignorar src é proibido/u);
+    assertSemVazamento(result, fx, eslint);
+  });
+}
+
+const ESLINT_ARRAY_MALFORMADO = `export default [{
+  ignores: ["docs/**",
+  files: ["src/**/*.ts"],
+  ${REGRAS_LINT}
+}];\n`;
+
+const ESLINT_ARRAY_TRUNCADO = `${ESLINT}const extra = { ignores: [ "docs/**"\n`;
+
+const IGNORES_ILEGIVEIS = [
+  ["array malformado", ESLINT_ARRAY_MALFORMADO],
+  ["array truncado sem fechamento", ESLINT_ARRAY_TRUNCADO],
+  ["conteúdo não textual: identificador", eslintComIgnores("PADROES_IGNORADOS")],
+  ["conteúdo não textual: espalhamento", eslintComIgnores('...BASE, "docs/**"')],
+  ["conteúdo não textual: número", eslintComIgnores('42, "docs/**"')]
+];
+
+for (const [nome, eslint] of IGNORES_ILEGIVEIS) {
+  test(`recusa lista de ignores ilegível — ${nome}`, () => {
+    const fx = fixture({ eslint });
+    const result = run(fx);
+    assertReprova(result, /Configuração candidata reprovada: lista de padrões ignorados ilegível ou não textual/u);
+    assertSemVazamento(result, fx, eslint);
+  });
+}
+
+const IGNORES_SEGUROS = [
+  ["glob com colchete que não alcança src", eslintComIgnores('"docs/*.[]]"')],
+  ["múltiplos arrays seguros", eslintComIgnores('"docs/**"', '"build/**"', '"coverage/[]]/**"')],
+  ["sem nenhum ignores", ESLINT]
+];
+
+for (const [nome, eslint] of IGNORES_SEGUROS) {
+  test(`aceita configuração de lint sem alcance em src — ${nome}`, () => {
+    const result = run(fixture({ eslint }));
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), "Configuração candidata compatível com a política confiável.");
+  });
+}
+
+// --- A propriedade que ignora arquivos precisa ser LOCALIZADA antes de se
+// decidir se o valor é aceitável. Âncora que exige chave + ":" + "[" deixa
+// passar tanto a chave escrita em outra grafia quanto o valor dinâmico, e
+// ausência de correspondência vira aprovação silenciosa.
+
+function eslintComPropriedades(...propriedades) {
+  const blocos = propriedades.map((propriedade, indice) =>
+    indice === 0 ? `{ ${propriedade}, files: ["src/**/*.ts"], ${REGRAS_LINT} }` : `{ ${propriedade} }`
+  );
+  return `export default [\n  ${blocos.join(",\n  ")}\n];\n`;
+}
+
+const PADROES_SEGUROS = 'ignores: ["docs/**"]';
+const NAO_LITERAL = /Configuração candidata reprovada: lista de padrões ignorados não é um array literal/u;
+const ALCANCA_SRC = /Configuração candidata reprovada: ignorar src é proibido/u;
+
+const VALORES_DINAMICOS = [
+  ["valor por identificador", "ignores: IGNORES"],
+  ["valor por chamada de função", "ignores: buildIgnores()"],
+  ["valor por condicional", 'ignores: condition ? ["docs/**"] : ["src/**"]']
+];
+
+for (const [nome, propriedade] of VALORES_DINAMICOS) {
+  test(`recusa padrões ignorados sem array literal — ${nome} no primeiro bloco`, () => {
+    const eslint = eslintComPropriedades(propriedade);
+    const fx = fixture({ eslint });
+    const result = run(fx);
+    assertReprova(result, NAO_LITERAL);
+    assertSemVazamento(result, fx, eslint);
+  });
+
+  test(`recusa padrões ignorados sem array literal — ${nome} no terceiro bloco`, () => {
+    const eslint = eslintComPropriedades(PADROES_SEGUROS, PADROES_SEGUROS, propriedade);
+    const fx = fixture({ eslint });
+    const result = run(fx);
+    assertReprova(result, NAO_LITERAL);
+    assertSemVazamento(result, fx, eslint);
+  });
+}
+
+const CHAVES_LITERAIS_QUE_ALCANCAM_SRC = [
+  ["chave em aspas duplas", '"ignores": ["src/**"]'],
+  ["chave em aspas simples", "'ignores': [\"src/**\"]"],
+  ["chave computada literal", '["ignores"]: ["src/**"]']
+];
+
+for (const [nome, propriedade] of CHAVES_LITERAIS_QUE_ALCANCAM_SRC) {
+  test(`recusa ignore de lint que alcança src — ${nome} no primeiro bloco`, () => {
+    const eslint = eslintComPropriedades(propriedade);
+    const fx = fixture({ eslint });
+    const result = run(fx);
+    assertReprova(result, ALCANCA_SRC);
+    assertSemVazamento(result, fx, eslint);
+  });
+
+  test(`recusa ignore de lint que alcança src — ${nome} no segundo bloco`, () => {
+    const eslint = eslintComPropriedades(PADROES_SEGUROS, propriedade);
+    const fx = fixture({ eslint });
+    const result = run(fx);
+    assertReprova(result, ALCANCA_SRC);
+    assertSemVazamento(result, fx, eslint);
+  });
+}
+
+const CHAVES_LITERAIS_SEGURAS = [
+  ["chave em aspas duplas", eslintComPropriedades('"ignores": ["docs/**"]')],
+  ["chave em aspas simples", eslintComPropriedades("'ignores': [\"dist/**\"]")],
+  ["chave computada em aspas duplas", eslintComPropriedades('["ignores"]: ["coverage/**"]')],
+  ["chave computada em aspas simples", eslintComPropriedades("['ignores']: [\"build/**\"]")],
+  [
+    "grafias diferentes no mesmo arquivo",
+    eslintComPropriedades(
+      PADROES_SEGUROS,
+      '"ignores": ["dist/**"]',
+      "'ignores': [\"build/**\"]",
+      '["ignores"]: ["coverage/**"]'
+    )
+  ],
+  ["nenhuma propriedade de padrões ignorados", eslintComPropriedades('files: ["docs/**/*.ts"]')]
+];
+
+for (const [nome, eslint] of CHAVES_LITERAIS_SEGURAS) {
+  test(`aceita padrões ignorados literais e seguros — ${nome}`, () => {
+    const result = run(fixture({ eslint }));
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), "Configuração candidata compatível com a política confiável.");
+  });
+}
