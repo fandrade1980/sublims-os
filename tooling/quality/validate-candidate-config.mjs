@@ -1,6 +1,17 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+
+const MAX_CANDIDATE_BYTES = 1024 * 1024;
+const MAX_IGNORE_ARRAYS = 50;
+const MAX_PATTERNS_PER_ARRAY = 1000;
+const MAX_PATTERN_LENGTH = 1024;
+const MAX_PATTERN_SEGMENTS = 32;
+
+const NAO_CANONICO = "padrão de caminho em forma não canônica";
+const LIMITE_PADRAO = "padrão de caminho excede os limites estruturais";
+const LIMITE_LISTA = "lista de padrões excede os limites estruturais";
+const LIMITE_ARQUIVO = "arquivo de configuração candidata excede o tamanho máximo";
 
 function parseArguments(argv) {
   const values = new Map();
@@ -32,6 +43,19 @@ function readText(file) {
   }
 }
 
+// Leitor exclusivo da candidata: o limite de tamanho não se aplica à política confiável.
+function readCandidateText(file) {
+  let info;
+  try {
+    info = statSync(file);
+  } catch {
+    throw new Error("configuração obrigatória ausente ou ilegível");
+  }
+  if (!info.isFile()) throw new Error("configuração obrigatória ausente ou ilegível");
+  if (info.size > MAX_CANDIDATE_BYTES) throw new Error(LIMITE_ARQUIVO);
+  return readText(file);
+}
+
 function readJson(file) {
   const text = readText(file);
   try {
@@ -57,6 +81,7 @@ function assertCoverage(vitest, policy) {
     throw new Error("escopo de cobertura incompatível com a política");
   }
   const protectedPaths = ["src/modules/__candidate__.ts", "src/shared/__candidate__.ts"];
+  if (excluded !== null && excluded.length > MAX_PATTERNS_PER_ARRAY) throw new Error(LIMITE_LISTA);
   if (excluded === null || excluded.some((pattern) => protectedPaths.some((path) => globMatches(pattern, path)))) {
     throw new Error("exclusão de cobertura incompatível com a política");
   }
@@ -123,14 +148,136 @@ function balancedContent(source, start, open, close) {
   return null;
 }
 
+// Classe de caracteres POSIX: "]" logo após "[", "[!" ou "[^" é literal e não fecha
+// a classe. Classe sem fechamento ou com intervalo invertido não tem semântica
+// inequívoca e reprova. "\" dentro da classe é caractere comum, como em POSIX.
+function compileClass(segment, start, tokens) {
+  let index = start + 1;
+  let negated = false;
+  if (segment[index] === "!" || segment[index] === "^") {
+    negated = true;
+    index += 1;
+  }
+  const ranges = [];
+  let first = true;
+  while (index < segment.length) {
+    const character = segment[index];
+    if (character === "]" && !first) {
+      tokens.push({ type: "class", negated, ranges });
+      return index;
+    }
+    first = false;
+    if (segment[index + 1] === "-" && index + 2 < segment.length && segment[index + 2] !== "]") {
+      const upper = segment[index + 2];
+      if (upper < character) throw new Error(NAO_CANONICO);
+      ranges.push([character, upper]);
+      index += 3;
+      continue;
+    }
+    ranges.push([character, character]);
+    index += 1;
+  }
+  throw new Error(NAO_CANONICO);
+}
+
+function compileSegment(segment) {
+  const tokens = [];
+  for (let index = 0; index < segment.length; index += 1) {
+    const character = segment[index];
+    if (character === "*") {
+      if (tokens.length === 0 || tokens[tokens.length - 1].type !== "star") tokens.push({ type: "star" });
+      continue;
+    }
+    if (character === "?") {
+      tokens.push({ type: "any" });
+      continue;
+    }
+    if (character === "[") {
+      index = compileClass(segment, index, tokens);
+      continue;
+    }
+    tokens.push({ type: "char", value: character });
+  }
+  return tokens;
+}
+
+function compilePattern(pattern) {
+  if (pattern.startsWith("!")) throw new Error(NAO_CANONICO);
+  if (pattern.length > MAX_PATTERN_LENGTH) throw new Error(LIMITE_PADRAO);
+  let normalized = pattern;
+  while (normalized.endsWith("/")) normalized = normalized.slice(0, -1);
+  const segments = normalized.split("/");
+  if (segments.length > MAX_PATTERN_SEGMENTS) throw new Error(LIMITE_PADRAO);
+  return segments.map((segment) =>
+    segment === "**" ? { globstar: true } : { globstar: false, tokens: compileSegment(segment) }
+  );
+}
+
+function matchesToken(token, character) {
+  if (token.type === "any") return true;
+  if (token.type === "char") return token.value === character;
+  const inside = token.ranges.some(([low, high]) => character >= low && character <= high);
+  return token.negated ? !inside : inside;
+}
+
+// Autômato por programação dinâmica: cada caractere avança um conjunto de estados
+// limitado pelo número de tokens. Não há retrocesso.
+function matchSegment(tokens, text) {
+  const total = tokens.length;
+  let row = new Array(total + 1).fill(false);
+  row[0] = true;
+  for (let index = 0; index < total; index += 1) {
+    if (row[index] && tokens[index].type === "star") row[index + 1] = true;
+  }
+  for (const character of text) {
+    const next = new Array(total + 1).fill(false);
+    for (let index = 0; index < total; index += 1) {
+      if (!row[index]) continue;
+      if (tokens[index].type === "star") next[index] = true;
+      else if (matchesToken(tokens[index], character)) next[index + 1] = true;
+    }
+    for (let index = 0; index < total; index += 1) {
+      if (next[index] && tokens[index].type === "star") next[index + 1] = true;
+    }
+    row = next;
+  }
+  return row[total];
+}
+
+// Retorna, para cada prefixo do caminho, se o padrão inteiro o cobre.
+function matchSegments(patternSegments, pathSegments) {
+  const total = pathSegments.length;
+  let row = new Array(total + 1).fill(false);
+  row[0] = true;
+  for (const segment of patternSegments) {
+    const next = new Array(total + 1).fill(false);
+    if (segment.globstar) {
+      let reached = false;
+      for (let index = 0; index <= total; index += 1) {
+        if (row[index]) reached = true;
+        next[index] = reached;
+      }
+    } else {
+      for (let index = 0; index < total; index += 1) {
+        if (row[index] && matchSegment(segment.tokens, pathSegments[index])) next[index + 1] = true;
+      }
+    }
+    row = next;
+  }
+  return row;
+}
+
 function globMatches(pattern, path) {
   if (typeof pattern !== "string") return false;
-  const source = pattern
-    .replace(/[|\\{}()[\]^$+?.]/gu, "\\$&")
-    .replace(/\*\*/gu, "@@GLOBSTAR@@")
-    .replace(/\*/gu, "[^/]*")
-    .replace(/@@GLOBSTAR@@/gu, ".*");
-  return new RegExp(`^${source}$`, "u").test(path);
+  const compiled = compilePattern(pattern);
+  const pathSegments = path.split("/");
+  const row = matchSegments(compiled, pathSegments);
+  if (row[pathSegments.length]) return true;
+  // Prefixo casado é diretório alcançado: o padrão também alcança os descendentes.
+  for (let index = 1; index < pathSegments.length; index += 1) {
+    if (row[index]) return true;
+  }
+  return false;
 }
 
 function literalStrings(content) {
@@ -152,11 +299,14 @@ function significantIndex(source, from) {
 
 function assertIgnores(eslint) {
   const protectedPaths = ["src/__candidate__.ts", "src/modules/__candidate__.ts", "src/shared/__candidate__.ts"];
-  for (const match of eslint.matchAll(IGNORES_KEY)) {
+  const declarations = [...eslint.matchAll(IGNORES_KEY)];
+  if (declarations.length > MAX_IGNORE_ARRAYS) throw new Error(LIMITE_LISTA);
+  for (const match of declarations) {
     const start = significantIndex(eslint, match.index + match[0].length);
     if (eslint[start] !== "[") throw new Error("lista de padrões ignorados não é um array literal");
     const patterns = literalStrings(balancedContent(eslint, start, "[", "]"));
     if (patterns === null) throw new Error("lista de padrões ignorados ilegível ou não textual");
+    if (patterns.length > MAX_PATTERNS_PER_ARRAY) throw new Error(LIMITE_LISTA);
     if (patterns.some((pattern) => protectedPaths.some((path) => globMatches(pattern, path)))) {
       throw new Error("ignorar src é proibido");
     }
@@ -243,8 +393,8 @@ try {
   const candidate = resolve(options.get("--candidate"));
   const policyFile = resolve(options.get("--policy"));
   const policy = readJson(policyFile);
-  const vitest = readText(join(candidate, "vitest.config.ts"));
-  const eslint = readText(join(candidate, "eslint.config.mjs"));
+  const vitest = readCandidateText(join(candidate, "vitest.config.ts"));
+  const eslint = readCandidateText(join(candidate, "eslint.config.mjs"));
   const trustedRoot = resolve(dirname(policyFile), "..");
   const dependencyConfig = readJson(join(trustedRoot, "tooling", "toolchain", "dependency-cruiser.json"));
   assertCoverage(vitest, policy);

@@ -534,3 +534,125 @@ for (const [nome, eslint] of CHAVES_LITERAIS_SEGURAS) {
     assert.equal(result.stdout.trim(), "Configuração candidata compatível com a política confiável.");
   });
 }
+
+// --- Casamento de padrões: a decisão precisa ser determinística e segmentada.
+// Um padrão que nomeia o diretório protegido alcança os descendentes dele, com
+// ou sem barra final, e "**" casa zero ou mais segmentos. Classes de caracteres
+// são legítimas e precisam ser interpretadas, não transformadas em expressão
+// regular. Limites estruturais são verificados antes do casamento.
+
+const APROVACAO = "Configuração candidata compatível com a política confiável.";
+const NAO_CANONICA = /Configuração candidata reprovada: padrão de caminho em forma não canônica/u;
+const LIMITE_PADRAO = /Configuração candidata reprovada: padrão de caminho excede os limites estruturais/u;
+const LIMITE_LISTA = /Configuração candidata reprovada: lista de padrões excede os limites estruturais/u;
+const LIMITE_ARQUIVO =
+  /Configuração candidata reprovada: arquivo de configuração candidata excede o tamanho máximo/u;
+
+// Fusível contra processo residual. Nunca é a asserção principal de um teste.
+function runComFusivel(fx) {
+  return spawnSync(process.execPath, [cli, "--candidate", fx.candidate, "--policy", fx.policy], {
+    encoding: "utf8",
+    timeout: 20_000,
+    killSignal: "SIGKILL"
+  });
+}
+
+const excludeCom = (lista) => VITEST.replace("exclude: []", `exclude: [${lista}]`);
+
+const DIRETORIO_EM_IGNORES = ["src/", "src", "**/src/**"];
+
+for (const padrao of DIRETORIO_EM_IGNORES) {
+  test(`recusa ignore de lint que alcança src — semântica de diretório ${JSON.stringify(padrao)}`, () => {
+    const eslint = eslintComIgnores(JSON.stringify(padrao));
+    const fx = fixture({ eslint });
+    const result = runComFusivel(fx);
+    assertReprova(result, ALCANCA_SRC);
+    assertSemVazamento(result, fx, eslint);
+  });
+}
+
+const DIRETORIO_EM_EXCLUDE = ["src/modules/", "src/modules", "**/src/modules/**"];
+
+for (const padrao of DIRETORIO_EM_EXCLUDE) {
+  test(`recusa exclusão de cobertura que alcança módulos — semântica de diretório ${JSON.stringify(padrao)}`, () => {
+    const result = runComFusivel(fixture({ vitest: excludeCom(JSON.stringify(padrao)) }));
+    assertReprova(result, /Configuração candidata reprovada: exclusão de cobertura incompatível com a política/u);
+  });
+}
+
+const CLASSES_INVALIDAS = [
+  ["classe sem fechamento", '"docs/[abc/**"'],
+  ["classe com intervalo invertido", '"docs/[z-a]/**"'],
+  ["padrão iniciado por negação", '"!src/**"']
+];
+
+for (const [nome, lista] of CLASSES_INVALIDAS) {
+  test(`recusa padrão de caminho em forma não canônica — ${nome}`, () => {
+    const eslint = eslintComIgnores(lista);
+    const fx = fixture({ eslint });
+    const result = runComFusivel(fx);
+    assertReprova(result, NAO_CANONICA);
+    assertSemVazamento(result, fx, eslint);
+  });
+}
+
+const CLASSES_SEGURAS_EM_EXCLUDE = [
+  ["colchete literal no fim do segmento", '"docs/*.[]]"'],
+  ["colchete literal como segmento inteiro", '"coverage/[]]/**"']
+];
+
+for (const [nome, lista] of CLASSES_SEGURAS_EM_EXCLUDE) {
+  test(`aceita classe de caracteres canônica em exclusão de cobertura — ${nome}`, () => {
+    const result = runComFusivel(fixture({ vitest: excludeCom(lista) }));
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), APROVACAO);
+  });
+}
+
+test("recusa padrão de caminho com mais segmentos do que o limite", () => {
+  const eslint = eslintComIgnores(JSON.stringify(Array.from({ length: 40 }, () => "**").join("/")));
+  const fx = fixture({ eslint });
+  const result = runComFusivel(fx);
+  assertReprova(result, LIMITE_PADRAO);
+  assertSemVazamento(result, fx, eslint);
+});
+
+test("recusa padrão de caminho acima do comprimento máximo", () => {
+  const eslint = eslintComIgnores(JSON.stringify(`docs/${"a".repeat(1100)}`));
+  const fx = fixture({ eslint });
+  const result = runComFusivel(fx);
+  assertReprova(result, LIMITE_PADRAO);
+  assertSemVazamento(result, fx, eslint);
+});
+
+test("recusa array de padrões ignorados acima do limite de padrões", () => {
+  const eslint = eslintComIgnores(Array.from({ length: 1001 }, (_, i) => `"docs/p${i}/**"`).join(", "));
+  const fx = fixture({ eslint });
+  const result = runComFusivel(fx);
+  assertReprova(result, LIMITE_LISTA);
+  assertSemVazamento(result, fx, eslint);
+});
+
+test("recusa quantidade de arrays de padrões ignorados acima do limite", () => {
+  const eslint = eslintComIgnores(...Array.from({ length: 51 }, () => '"docs/**"'));
+  const fx = fixture({ eslint });
+  const result = runComFusivel(fx);
+  assertReprova(result, LIMITE_LISTA);
+  assertSemVazamento(result, fx, eslint);
+});
+
+test("recusa arquivo de configuração candidata acima do tamanho máximo", () => {
+  const eslint = `${ESLINT}const padding = "${"a".repeat(1024 * 1024 + 1)}";\n`;
+  const fx = fixture({ eslint });
+  const result = runComFusivel(fx);
+  assertReprova(result, LIMITE_ARQUIVO);
+  assert.ok(!result.stderr.includes(fx.candidate), "mensagem vazou o caminho da candidata");
+});
+
+test("decide de forma determinística padrão com muitos coringas em um único segmento", () => {
+  const eslint = eslintComIgnores(JSON.stringify(`${"**".repeat(40)}z`));
+  const result = runComFusivel(fixture({ eslint }));
+  assert.notEqual(result.signal, "SIGKILL", "processo não terminou dentro do fusível");
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), APROVACAO);
+});
