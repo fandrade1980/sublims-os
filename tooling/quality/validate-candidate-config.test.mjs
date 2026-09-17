@@ -656,3 +656,115 @@ test("decide de forma determinística padrão com muitos coringas em um único s
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout.trim(), APROVACAO);
 });
+
+// --- Literal de string nos arrays de padrões precisa ser DECODIFICADO antes do
+// casamento. Ler o texto cru entre aspas deixa passar escapes que reconstroem um
+// caminho protegido. Literal sem leitura inequívoca reprova sem executar nada.
+
+const EXCLUSAO_INCOMPATIVEL =
+  /Configuração candidata reprovada: exclusão de cobertura incompatível com a política/u;
+const IGNORES_ILEGIVEL =
+  /Configuração candidata reprovada: lista de padrões ignorados ilegível ou não textual/u;
+
+const ESCAPES_QUE_ALCANCAM_SRC = [
+  ["escape unicode", '"\\u0073rc/**"'],
+  ["escape de barra", '"src\\/**"'],
+  ["escape hexadecimal", '"sr\\x63/**"']
+];
+
+for (const [nome, lista] of ESCAPES_QUE_ALCANCAM_SRC) {
+  test(`recusa ignore de lint que alcança src por ${nome}`, () => {
+    const eslint = eslintComIgnores(lista);
+    const fx = fixture({ eslint });
+    const result = runComFusivel(fx);
+    assertReprova(result, ALCANCA_SRC);
+    assertSemVazamento(result, fx, eslint);
+  });
+}
+
+const ESCAPES_QUE_ALCANCAM_MODULOS = [
+  ["escape unicode", '"\\u0073rc/modules/**"'],
+  ["escape de barra", '"src\\/modules/**"'],
+  ["escape hexadecimal", '"sr\\x63/modules/**"']
+];
+
+for (const [nome, lista] of ESCAPES_QUE_ALCANCAM_MODULOS) {
+  test(`recusa exclusão de cobertura que alcança módulos por ${nome}`, () => {
+    const result = runComFusivel(fixture({ vitest: excludeCom(lista) }));
+    assertReprova(result, EXCLUSAO_INCOMPATIVEL);
+  });
+}
+
+const ESCAPES_SEGUROS = [
+  ["escape unicode", '"do\\u0063s/**"'],
+  ["escape de barra", '"docs\\/**"'],
+  ["escape hexadecimal", '"do\\x63s/**"']
+];
+
+for (const [nome, lista] of ESCAPES_SEGUROS) {
+  test(`aceita ignore de lint com ${nome} que decodifica para caminho seguro`, () => {
+    const result = runComFusivel(fixture({ eslint: eslintComIgnores(lista) }));
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), APROVACAO);
+  });
+
+  test(`aceita exclusão de cobertura com ${nome} que decodifica para caminho seguro`, () => {
+    const result = runComFusivel(fixture({ vitest: excludeCom(lista) }));
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), APROVACAO);
+  });
+}
+
+const ESLINT_LITERAL_SEM_FECHAMENTO = `${ESLINT}const extra = { ignores: ["docs/**", "build/**]\n};\n`;
+
+const LITERAIS_MALFORMADOS_NO_LINT = [
+  ["escape unicode incompleto", eslintComIgnores('"docs\\u12"')],
+  ["escape hexadecimal incompleto", eslintComIgnores('"docs\\x4"')],
+  ["literal sem fechamento", ESLINT_LITERAL_SEM_FECHAMENTO],
+  ["quebra de linha crua no literal", eslintComIgnores('"docs/\n**"')],
+  ["elemento por template literal", eslintComIgnores("`docs/**`")],
+  // Decisão: "\u{...}" é forma não canônica de literal e reprova sem decodificar.
+  ["escape unicode com chaves", eslintComIgnores('"\\u{73}rc/**"')]
+];
+
+for (const [nome, eslint] of LITERAIS_MALFORMADOS_NO_LINT) {
+  test(`recusa lista de ignores com literal malformado — ${nome}`, () => {
+    const fx = fixture({ eslint });
+    const result = runComFusivel(fx);
+    assertReprova(result, IGNORES_ILEGIVEL);
+    assertSemVazamento(result, fx, eslint);
+  });
+}
+
+const LITERAIS_MALFORMADOS_NA_COBERTURA = [
+  ["escape unicode incompleto", '"docs\\u12"'],
+  ["escape hexadecimal incompleto", '"docs\\x4"'],
+  ["quebra de linha crua no literal", '"docs/\n**"'],
+  ["elemento por template literal", "`docs/**`"]
+];
+
+for (const [nome, lista] of LITERAIS_MALFORMADOS_NA_COBERTURA) {
+  test(`recusa exclusão de cobertura com literal malformado — ${nome}`, () => {
+    const result = runComFusivel(fixture({ vitest: excludeCom(lista) }));
+    assertReprova(result, EXCLUSAO_INCOMPATIVEL);
+  });
+}
+
+const LITERAIS_CANONICOS_SEGUROS = [
+  ["aspas duplas", '"docs/**"'],
+  ["aspas simples", "'docs/**'"],
+  ["vírgula final", '"docs/**",'],
+  ["múltiplos padrões", '"docs/**", "build/**", "coverage/**"'],
+  ["classe com colchete literal", '"docs/*.[]]"'],
+  ["classe com barra invertida literal", '"docs/*.[\\]]"'],
+  ["escape de aspas dentro do literal", '"docs/a\\"b/**"'],
+  ["escape de barra invertida", '"docs/a\\\\b/**"']
+];
+
+for (const [nome, lista] of LITERAIS_CANONICOS_SEGUROS) {
+  test(`aceita literal canônico seguro em ignores — ${nome}`, () => {
+    const result = runComFusivel(fixture({ eslint: eslintComIgnores(lista) }));
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), APROVACAO);
+  });
+}

@@ -116,13 +116,7 @@ function objectProperty(source, name) {
 function stringArrayProperty(source, name) {
   const match = singleAnchor(source, new RegExp(`\\b${name}\\s*:\\s*\\[`, "gu"), name);
   if (match === null) return null;
-  const content = balancedContent(source, match.index + match[0].lastIndexOf("["), "[", "]");
-  if (content === null) return null;
-  const values = [];
-  const literal = /(["'])((?:\\.|(?!\1)[^\\])*)\1/gu;
-  for (const item of content.matchAll(literal)) values.push(item[2]);
-  const residue = content.replace(literal, "").replace(/[\s,]/gu, "");
-  return residue === "" ? values : null;
+  return literalStringArray(balancedContent(source, match.index + match[0].lastIndexOf("["), "[", "]"));
 }
 
 function balancedContent(source, start, open, close) {
@@ -280,13 +274,84 @@ function globMatches(pattern, path) {
   return false;
 }
 
-function literalStrings(content) {
+// Escapes com semântica explícita. Qualquer outro caractere após "\" vale por si
+// mesmo, como em `"[\]]"`, exceto dígito decimal (forma octal legada), "x"/"u"
+// (tratados adiante) e quebra de linha (continuação de linha não é canônica aqui).
+const ESCAPES_SIMPLES = new Map([
+  ["\\", "\\"],
+  ['"', '"'],
+  ["'", "'"],
+  ["/", "/"],
+  ["n", "\n"],
+  ["r", "\r"],
+  ["t", "\t"],
+  ["b", "\b"],
+  ["f", "\f"],
+  ["v", "\v"]
+]);
+
+function decodeHex(source, start, length) {
+  const digits = source.slice(start, start + length);
+  if (digits.length !== length || !/^[0-9a-fA-F]+$/u.test(digits)) return null;
+  return String.fromCharCode(Number.parseInt(digits, 16));
+}
+
+// Leitor determinístico de literal de string: sem avaliação, sem execução e sem
+// eco do valor lido. Retorna o valor DECODIFICADO e a posição após a aspa final.
+// "\u{...}" é recusado por não ser forma canônica de literal de padrão.
+function readStringLiteral(source, start) {
+  const quote = source[start];
+  if (quote !== '"' && quote !== "'") return null;
+  let value = "";
+  let index = start + 1;
+  while (index < source.length) {
+    const character = source[index];
+    if (character === quote) return { value, end: index + 1 };
+    if (character === "\n" || character === "\r") return null;
+    if (character !== "\\") {
+      value += character;
+      index += 1;
+      continue;
+    }
+    const escape = source[index + 1];
+    if (escape === undefined || escape === "\n" || escape === "\r") return null;
+    if (ESCAPES_SIMPLES.has(escape)) {
+      value += ESCAPES_SIMPLES.get(escape);
+      index += 2;
+      continue;
+    }
+    if (escape === "x" || escape === "u") {
+      const decoded = decodeHex(source, index + 2, escape === "x" ? 2 : 4);
+      if (decoded === null) return null;
+      value += decoded;
+      index += escape === "x" ? 4 : 6;
+      continue;
+    }
+    if (escape >= "0" && escape <= "9") return null;
+    value += escape;
+    index += 2;
+  }
+  return null;
+}
+
+// Analisador único de array literal textual, compartilhado por cobertura e lint.
+// Separadores e espaços são tolerados; qualquer outro conteúdo reprova.
+function literalStringArray(content) {
   if (typeof content !== "string") return null;
   const values = [];
-  const literal = /(["'])((?:\\.|(?!\1)[^\\])*)\1/gu;
-  for (const item of content.matchAll(literal)) values.push(item[2]);
-  const residue = content.replace(literal, "").replace(/[\s,]/gu, "");
-  return residue === "" ? values : null;
+  let index = 0;
+  while (index < content.length) {
+    const character = content[index];
+    if (character === "," || /\s/u.test(character)) {
+      index += 1;
+      continue;
+    }
+    const literal = readStringLiteral(content, index);
+    if (literal === null) return null;
+    values.push(literal.value);
+    index = literal.end;
+  }
+  return values;
 }
 
 const IGNORES_KEY = /(?:\[\s*(["'])ignores\1\s*\]|(["'])ignores\2|\bignores\b)\s*:/gu;
@@ -304,7 +369,7 @@ function assertIgnores(eslint) {
   for (const match of declarations) {
     const start = significantIndex(eslint, match.index + match[0].length);
     if (eslint[start] !== "[") throw new Error("lista de padrões ignorados não é um array literal");
-    const patterns = literalStrings(balancedContent(eslint, start, "[", "]"));
+    const patterns = literalStringArray(balancedContent(eslint, start, "[", "]"));
     if (patterns === null) throw new Error("lista de padrões ignorados ilegível ou não textual");
     if (patterns.length > MAX_PATTERNS_PER_ARRAY) throw new Error(LIMITE_LISTA);
     if (patterns.some((pattern) => protectedPaths.some((path) => globMatches(pattern, path)))) {
