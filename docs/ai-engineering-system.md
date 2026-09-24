@@ -122,6 +122,57 @@ A inspeção é **estática**. O conteúdo é lido como texto e analisado por co
 
 Reprova configuração ausente ou ilegível, inválida, ambígua, dinâmica e incompatível com a política, sem ecoar o conteúdo inspecionado.
 
+### Gramática aceita, intencionalmente mais estreita
+
+A gramática que o validador aceita é **deliberadamente mais estreita** que a sintaxe geral do ESLint e do Vitest. Ele lê texto e não executa a configuração candidata; portanto, só pode afirmar o que consegue reconhecer com segurança na forma escrita. Toda forma que ele não reconhece é **reprovada**, não ignorada — inclusive formas que a ferramenta original aceitaria sem reclamar.
+
+A escolha é deliberada e tem uma razão só: quanto menor a superfície que o validador precisa entender, menor a chance de ele afirmar algo falso sobre o que o gate fará. Uma gramática permissiva exigiria reimplementar a semântica de resolução do ESLint e do Vitest, e a cada divergência entre as duas leituras nasceria um caminho para esvaziar o gate mantendo o validador satisfeito.
+
+Restrições principais, sem promessa de suporte a nenhuma forma além destas:
+
+- **Nada executável.** Chamada, expressão imediatamente invocada, `import(...)`, `await import(...)`, acessador, método, espalhamento, atribuição e identificador livre reprovam, em qualquer profundidade, tanto no lint quanto na cobertura.
+- **Preâmbulo do lint.** Antes do único `export default`, apenas espaços, comentários e a importação do analisador. A configuração de cobertura não admite preâmbulo algum.
+- **Expressão exportada.** No lint, um array literal de objetos literais. Na cobertura, um objeto literal direto — envoltório de função, inclusive `defineConfig(...)`, reprova. Depois do objeto exportado só cabem espaços, comentários e o ponto e vírgula final.
+- **Chaves com grafia direta.** `files`, `languageOptions`, `linterOptions` e `rules` precisam ser escritas literalmente; chave citada, computada ou com escape reprova. `ignores` mantém, por compatibilidade, as grafias citada e computada.
+- **Conjunto fechado de propriedades.** No bloco de lint, apenas `files`, `ignores`, `languageOptions`, `linterOptions` e `rules`. Em `coverage`, apenas `include`, `exclude` e `thresholds`. Em `thresholds`, apenas as quatro métricas. Qualquer outra propriedade reprova, mesmo com valor estático, e mesmo sendo uma opção real da ferramenta — `plugins`, `settings`, `name`, `processor`, `all`, `provider` e limiar por arquivo estão entre as recusadas.
+- **Padrões de caminho.** Dialeto restrito: `*`, `**`, `?` e classes de caracteres simples. Expansão por chaves, extglob, parênteses de grupo, classe POSIX nomeada e contrabarra no valor decodificado reprovam, porque este verificador não os interpreta como o consumidor interpretaria.
+- **Valores das regras.** Fora de `complexity`, apenas literais estáticos: texto, número decimal finito, `true`, `false`, `null`, e array ou objeto compostos recursivamente desses valores. Inteiro com zero à esquerda, expoente, hexadecimal, separador numérico e sufixo `n` reprovam.
+
+Exemplo mínimo e completo de `eslint.config.mjs` aceito:
+
+```javascript
+import parser from "@typescript-eslint/parser";
+
+export default [
+  {
+    files: ["src/**/*.ts"],
+    languageOptions: { parser },
+    linterOptions: { noInlineConfig: true, reportUnusedDisableDirectives: "error" },
+    rules: { complexity: ["error", { max: 10, variant: "classic" }] }
+  }
+];
+```
+
+Exemplo mínimo e completo de `vitest.config.ts` aceito:
+
+```typescript
+export default {
+  test: {
+    coverage: {
+      include: ["src/modules/**", "src/shared/**"],
+      exclude: [],
+      thresholds: { lines: 80, branches: 75, functions: 80, statements: 80 }
+    }
+  }
+};
+```
+
+Os dois exemplos foram derivados das fixtures positivas da suíte do validador, e os blocos publicados acima foram extraídos deste documento e validados separadamente pela CLI real.
+
+`tooling/toolchain/complexity.config.mjs` **não** é uma configuração candidata e não passa por esta gramática. Ela pertence à base confiável, é versionada junto dos validadores e usa formas que a gramática candidata recusaria — segunda importação, constantes, verificação de invariante e espalhamento. A assimetria é o próprio desenho: a base pode ser mais expressiva porque não é o objeto sob verificação.
+
+**Não existe exceção para contornar esta gramática.** `quality/policy-exceptions.json` registra afrouxamento de política — limiar reduzido, exclusão acrescentada, padrão canônico removido — e não autoriza forma sintática que o validador não reconheça. Uma necessidade legítima de forma nova exige **um PR próprio que amplie o validador**, com testes que a cubram e revisão, antes que a forma seja usada por qualquer candidato. Enquanto esse PR não for mesclado, a forma reprova.
+
 Análise estática é incompleta por natureza: ela não alcança toda forma de esvaziar um gate por composição dinâmica. A evidência decisiva é comportamental, e vem das provas de canário do PR 7, que injetam uma violação deliberada por gate e reprovam qualquer gate que aprove a própria violação.
 
 ## Runtime
