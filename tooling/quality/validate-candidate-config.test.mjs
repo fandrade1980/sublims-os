@@ -225,13 +225,15 @@ test("não importa nem avalia a configuração candidata", () => {
   assert.doesNotMatch(`${result.stdout}${result.stderr}`, /\n\s+at\s/u);
 });
 
-// A propriedade alheia migrou para o nível `test`, que continua tolerando
-// propriedades estáticas não relacionadas. Dentro de `coverage` a gramática é
-// fechada e a mesma tentativa reprova antes, pela forma — caso coberto adiante.
-test("não conta padrões em propriedade alheia à cobertura", () => {
-  const vitest = VITEST
-    .replace('["src/modules/**", "src/shared/**"]', "[]")
-    .replace("  test: {", '  test: {\n    note: ["src/modules/**", "src/shared/**"],');
+// H3b3. A propriedade alheia deixou de ter onde morar: os níveis exportado e
+// `test` também são fechados, e `note:` reprovaria pela forma antes de o escopo
+// ser comparado — o que mediria outra coisa. O carregador que sobra para o
+// padrão fora da cadeia efetiva é o comentário, e a pergunta continua a mesma.
+test("não conta padrões fora da cadeia efetiva de cobertura", () => {
+  const vitest = `// note: ["src/modules/**", "src/shared/**"]\n${VITEST.replace(
+    '["src/modules/**", "src/shared/**"]',
+    "[]"
+  )}`;
   const result = run(fixture({ vitest }));
   assertRejeicao(result, /escopo de cobertura incompatível/i);
 });
@@ -260,14 +262,18 @@ const WEAK_COVERAGE = `{ ${WEAK_INCLUDE}, ${WEAK_EXCLUDE}, ${WEAK_THRESHOLDS} }`
 
 const exportDefault = (body) => `export default ${body};\n`;
 const withCoverage = (body) => exportDefault(`{ test: { coverage: ${body} } }`);
-// Chamariz colocado em `test`, o nível mais interno que ainda tolera
-// propriedade estática não relacionada. Dentro de `coverage` e de `thresholds`
-// a gramática é fechada e o chamariz reprovaria pela forma, não por deixar de
-// ser contado — que é justamente o que estes vetores precisam demonstrar.
-const comChamarizEmTest = (decoy, coverage, depois = false) =>
-  exportDefault(
-    depois ? `{ test: { coverage: ${coverage}, docs: ${decoy} } }` : `{ test: { docs: ${decoy}, coverage: ${coverage} } }`
-  );
+// Chamariz fora da cadeia efetiva. Os três níveis inspecionados — exportado,
+// `test` e `coverage` — passaram a ter gramática FECHADA, então nenhuma
+// propriedade alheia sobrevive para carregar o chamariz: ali ele reprovaria
+// pela forma, e não por deixar de ser contado, que é justamente o que estes
+// vetores precisam demonstrar. O carregador restante é o comentário, que a
+// varredura converte em espaço antes de qualquer leitura estrutural — antes e
+// depois do objeto exportado, porque a pergunta é de ordem.
+const comChamarizForaDaCadeia = (decoy, coverage, depois = false) => {
+  const chamariz = `// test: { coverage: ${decoy} }\n`;
+  const efetiva = withCoverage(coverage);
+  return depois ? `${efetiva}${chamariz}` : `${chamariz}${efetiva}`;
+};
 
 function assertSemVazamentoDaCobertura(result, fx, vitest) {
   assert.doesNotMatch(`${result.stdout}${result.stderr}`, /\n\s+at\s/u);
@@ -338,16 +344,16 @@ const CHAMARIZ_OU_DUPLICADA = [
   [
     "test: chamariz antes",
     COBERTURA_ESCOPO,
-    exportDefault(
-      `{ define: { __DOC__: { test: { coverage: ${STRONG_COVERAGE} } } }, test: { coverage: ${WEAK_COVERAGE} } }`
-    )
+    `// define: { __DOC__: { test: { coverage: ${STRONG_COVERAGE} } } }\n${exportDefault(
+      `{ test: { coverage: ${WEAK_COVERAGE} } }`
+    )}`
   ],
   [
     "test: chamariz depois",
     COBERTURA_ESCOPO,
-    exportDefault(
-      `{ test: { coverage: ${WEAK_COVERAGE} }, define: { __DOC__: { test: { coverage: ${STRONG_COVERAGE} } } } }`
-    )
+    `${exportDefault(
+      `{ test: { coverage: ${WEAK_COVERAGE} } }`
+    )}// define: { __DOC__: { test: { coverage: ${STRONG_COVERAGE} } } }\n`
   ],
   [
     "test: chave duplicada",
@@ -357,12 +363,12 @@ const CHAMARIZ_OU_DUPLICADA = [
   [
     "coverage: chamariz antes",
     COBERTURA_ESCOPO,
-    exportDefault(`{ test: { docs: { coverage: ${STRONG_COVERAGE} }, coverage: ${WEAK_COVERAGE} } }`)
+    comChamarizForaDaCadeia(STRONG_COVERAGE, WEAK_COVERAGE)
   ],
   [
     "coverage: chamariz depois",
     COBERTURA_ESCOPO,
-    exportDefault(`{ test: { coverage: ${WEAK_COVERAGE}, docs: { coverage: ${STRONG_COVERAGE} } } }`)
+    comChamarizForaDaCadeia(STRONG_COVERAGE, WEAK_COVERAGE, true)
   ],
   [
     "coverage: chave duplicada",
@@ -372,12 +378,12 @@ const CHAMARIZ_OU_DUPLICADA = [
   [
     "include: chamariz antes",
     COBERTURA_ESCOPO,
-    comChamarizEmTest(`{ ${STRONG_INCLUDE} }`, `{ ${WEAK_INCLUDE}, ${STRONG_EXCLUDE}, ${STRONG_THRESHOLDS} }`)
+    comChamarizForaDaCadeia(`{ ${STRONG_INCLUDE} }`, `{ ${WEAK_INCLUDE}, ${STRONG_EXCLUDE}, ${STRONG_THRESHOLDS} }`)
   ],
   [
     "include: chamariz depois",
     COBERTURA_ESCOPO,
-    comChamarizEmTest(`{ ${STRONG_INCLUDE} }`, `{ ${WEAK_INCLUDE}, ${STRONG_EXCLUDE}, ${STRONG_THRESHOLDS} }`, true)
+    comChamarizForaDaCadeia(`{ ${STRONG_INCLUDE} }`, `{ ${WEAK_INCLUDE}, ${STRONG_EXCLUDE}, ${STRONG_THRESHOLDS} }`, true)
   ],
   [
     "include: chave duplicada",
@@ -387,12 +393,12 @@ const CHAMARIZ_OU_DUPLICADA = [
   [
     "exclude: chamariz antes",
     COBERTURA_EXCLUSAO,
-    comChamarizEmTest(`{ ${STRONG_EXCLUDE} }`, `{ ${STRONG_INCLUDE}, ${WEAK_EXCLUDE}, ${STRONG_THRESHOLDS} }`)
+    comChamarizForaDaCadeia(`{ ${STRONG_EXCLUDE} }`, `{ ${STRONG_INCLUDE}, ${WEAK_EXCLUDE}, ${STRONG_THRESHOLDS} }`)
   ],
   [
     "exclude: chamariz depois",
     COBERTURA_EXCLUSAO,
-    comChamarizEmTest(`{ ${STRONG_EXCLUDE} }`, `{ ${STRONG_INCLUDE}, ${WEAK_EXCLUDE}, ${STRONG_THRESHOLDS} }`, true)
+    comChamarizForaDaCadeia(`{ ${STRONG_EXCLUDE} }`, `{ ${STRONG_INCLUDE}, ${WEAK_EXCLUDE}, ${STRONG_THRESHOLDS} }`, true)
   ],
   [
     "exclude: chave duplicada",
@@ -402,12 +408,12 @@ const CHAMARIZ_OU_DUPLICADA = [
   [
     "thresholds: chamariz antes",
     COBERTURA_LIMIAR,
-    comChamarizEmTest(`{ ${STRONG_THRESHOLDS} }`, `{ ${STRONG_INCLUDE}, ${STRONG_EXCLUDE}, ${WEAK_THRESHOLDS} }`)
+    comChamarizForaDaCadeia(`{ ${STRONG_THRESHOLDS} }`, `{ ${STRONG_INCLUDE}, ${STRONG_EXCLUDE}, ${WEAK_THRESHOLDS} }`)
   ],
   [
     "thresholds: chamariz depois",
     COBERTURA_LIMIAR,
-    comChamarizEmTest(`{ ${STRONG_THRESHOLDS} }`, `{ ${STRONG_INCLUDE}, ${STRONG_EXCLUDE}, ${WEAK_THRESHOLDS} }`, true)
+    comChamarizForaDaCadeia(`{ ${STRONG_THRESHOLDS} }`, `{ ${STRONG_INCLUDE}, ${STRONG_EXCLUDE}, ${WEAK_THRESHOLDS} }`, true)
   ],
   [
     "thresholds: chave duplicada",
@@ -453,7 +459,7 @@ for (const [metric, valor] of Object.entries(LIMIARES)) {
     CHAMARIZ_OU_DUPLICADA.push([
       nome,
       padrao,
-      decoy === undefined ? withCoverage(coverage) : comChamarizEmTest(decoy, coverage, depois === true)
+      decoy === undefined ? withCoverage(coverage) : comChamarizForaDaCadeia(decoy, coverage, depois === true)
     ]);
   }
 }
@@ -1193,22 +1199,51 @@ const CORPO_P1 = `[{ files: ["src/**/*.ts"], rules: { complexity: ["error", { ma
 const CORPO_P2 = `[{ files: ["src/**/*.ts"], rules: { complexity: ["error", { max: 10, variant: "classic" }] } },
  { rules: { nota: "/*", complexity: "off", nota2: "*/" } }]`;
 
-// Os marcadores "/*" e "*/" ficam no nível `test`, que tolera propriedade
-// estática alheia, e passam a delimitar o objeto `coverage` inteiro: se o
-// scanner apagasse o trecho entre eles, a cadeia de cobertura desapareceria e a
-// razão da reprovação mudaria. O payload preservado — segundo `exclude` sem
-// caminho protegido e limiares zerados — continua ENTRE os marcadores.
-const CORPO_P3 = `{ test: { a: "/*", coverage: {
-  include: ["src/modules/**", "src/shared/**"], exclude: [],
-  thresholds: { lines: 80, branches: 75, functions: 80, statements: 80 },
-  exclude: ["src/modules/__candidate__.ts", "src/shared/**"],
-  thresholds: { lines: 0, branches: 0, functions: 0, statements: 0 }
-}, b: "*/" } }`;
+// H3b3. Os marcadores migraram de propriedades alheias em `test` — que a
+// gramática fechada recusa pela forma, o que mediria outra coisa — para o TEXTO
+// de padrões dentro de `coverage`, o único lugar que ainda lê strings.
+//
+// H3b4. A variante que somava marcadores E literal de expressão regular foi
+// DESFEITA, por medição: o `.replace` que instalava o regex sobrescrevia o único
+// `*/` da fixture, e a variante combinada ficava com "/*" pendente e nenhum
+// fechamento. Pior, ela reprovava por TOKEN — exatamente a mesma classe de um
+// regex sem marcador algum —, de modo que nada provava além do que o caso de
+// regex já provava. As duas classes são agora medidas separadamente:
+//
+//   CORPO_P3_REGEX  → recusa LÉXICA (token fora da gramática), sem marcador
+//                     nenhum no arquivo, para que o veredito não possa depender
+//                     deles;
+//   CORPO_P3        → classe SEMÂNTICA (propriedade de cobertura duplicada),
+//                     com um par de marcadores DELIBERADO cercando o payload.
+//
+// O par de CORPO_P3 é inequívoco por construção: nenhum padrão da fixture usa
+// "**", justamente porque um glob como "src/shared/**" já contém "/*" e tornaria
+// o marcador de abertura indistinguível de subproduto. Aqui o ÚNICO "/*" do
+// arquivo é o final de "docs/abre/*" e o ÚNICO "*/" é o final de "docs/fecha*/".
+// A unicidade do par e a presença do payload entre eles são ASSERTADAS abaixo,
+// em "o par de marcadores da cobertura é único e cerca o payload", junto com o
+// contrafactual: apagar o trecho entre os marcadores muda a classe da reprovação.
+const CORPO_P3_REGEX = `{ test: { coverage: {
+  include: ["docs/apenas"], exclude: /"/,
+  thresholds: { lines: 80, branches: 75, functions: 80, statements: 80 }
+} } }`;
 
-const CORPO_P3_COM_REGEX = CORPO_P3.replace('a: "/*"', 'r: /"/, a: "/*"').replace('b: "*/"', 'b: "*/", s: /"/');
+const CORPO_P3_SEGUNDO_EXCLUDE = 'exclude: ["src/modules/__candidate__.ts"]';
+const CORPO_P3_LIMIARES_ZERADOS = "thresholds: { lines: 0, branches: 0, functions: 0, statements: 0 }";
+
+const CORPO_P3 = `{ test: { coverage: {
+  include: ["docs/abre/*"], exclude: [],
+  thresholds: { lines: 80, branches: 75, functions: 80, statements: 80 },
+  ${CORPO_P3_SEGUNDO_EXCLUDE},
+  ${CORPO_P3_LIMIARES_ZERADOS},
+  include: ["docs/fecha*/"]
+} } }`;
 
 // Payloads reproduzidos: a candidata era APROVADA porque o trecho entre marcadores
-// internos a strings era apagado antes de a gramática analisar o arquivo.
+// internos a strings era apagado antes de a gramática analisar o arquivo. Em P1 e
+// P2 o literal de expressão regular vive no preâmbulo e o payload vive entre
+// marcadores; em P3 o literal está no próprio valor inspecionado e não há marcador
+// algum — o que esta família mede, em todos os três, é a RECUSA LÉXICA.
 const PAYLOADS_DE_DESSINCRONIZACAO = [
   [
     "P1 ignores que alcança src escondido por regex no preâmbulo",
@@ -1216,8 +1251,11 @@ const PAYLOADS_DE_DESSINCRONIZACAO = [
   ],
   ["P2 segundo bloco que desliga a complexidade", { eslint: `const re = /"/;\nexport default ${CORPO_P2};\n` }],
   [
-    "P3 cobertura sem caminho protegido e com limiares zerados",
-    { vitest: `export default ${CORPO_P3_COM_REGEX};\n` }
+    // Caso 1. Literal de expressão regular REAL no valor de `exclude`. O arquivo
+    // não contém "/*" nem "*/", nem dentro de string: a recusa é puramente
+    // léxica e nenhum marcador participa do veredito.
+    "P3 literal de expressão regular no valor de exclusão da cobertura",
+    { vitest: `export default ${CORPO_P3_REGEX};\n` }
   ]
 ];
 
@@ -1241,9 +1279,10 @@ const TEXTO_EFETIVO_VISIVEL = [
     COMPLEXIDADE_INCOMPATIVEL
   ],
   [
-    // A razão mudou de âncora contada para propriedade duplicada no MESMO objeto:
-    // a prova continua sendo que o segundo "exclude", entre os marcadores internos
-    // a strings, é enxergado pelo validador.
+    // Caso 2. Sem regex nenhum: só o par deliberado de marcadores dentro de
+    // strings. A razão mudou de âncora contada para propriedade duplicada no
+    // MESMO objeto; a prova continua sendo que o segundo "exclude", entre os
+    // marcadores, é enxergado pelo validador.
     "P3 sem regex: o segundo exclude entre os marcadores é lido",
     { vitest: `export default ${CORPO_P3};\n` },
     COBERTURA_DUPLICADA
@@ -1256,6 +1295,44 @@ for (const [nome, opcoes, padrao] of TEXTO_EFETIVO_VISIVEL) {
     assertReprova(result, padrao);
   });
 }
+
+// Sem esta verificação, a prova de P3 dependeria de alguém LER o literal e
+// acreditar que existe um par de marcadores cercando o payload. Aqui isso é
+// medido: o par é único, o payload está entre os marcadores, o caso de regex não
+// tem marcador nenhum e — contrafactual — apagar o trecho entre eles, que é
+// exatamente o que um scanner ingênuo faria, muda a classe da reprovação.
+const contar = (texto, marcador) => texto.split(marcador).length - 1;
+
+const apagarEntreMarcadores = (texto) => {
+  const abre = texto.indexOf("/*");
+  const fecha = texto.indexOf("*/", abre + 2);
+  assert.ok(abre !== -1 && fecha !== -1, "fixture não tem par de marcadores");
+  return `${texto.slice(0, abre)}${texto.slice(fecha + 2)}`;
+};
+
+test("o par de marcadores da cobertura é único e cerca o payload", () => {
+  assert.equal(contar(CORPO_P3_REGEX, "/*"), 0, "o caso de regex não pode depender de marcador");
+  assert.equal(contar(CORPO_P3_REGEX, "*/"), 0, "o caso de regex não pode depender de marcador");
+
+  assert.equal(contar(CORPO_P3, "/*"), 1, "o marcador de abertura precisa ser único, não subproduto de **");
+  assert.equal(contar(CORPO_P3, "*/"), 1, "o marcador de fechamento precisa ser único, não subproduto de **");
+
+  const abre = CORPO_P3.indexOf("/*");
+  const fecha = CORPO_P3.indexOf("*/");
+  for (const payload of [CORPO_P3_SEGUNDO_EXCLUDE, CORPO_P3_LIMIARES_ZERADOS]) {
+    const posicao = CORPO_P3.indexOf(payload);
+    assert.notEqual(posicao, -1, "payload ausente da fixture");
+    assert.ok(abre < posicao && posicao + payload.length < fecha, "payload fora do par de marcadores");
+  }
+
+  // O texto que sobraria se o trecho entre os marcadores fosse apagado reprova
+  // por OUTRA classe: a classe observada em P3 depende do payload preservado.
+  const truncado = apagarEntreMarcadores(CORPO_P3);
+  assert.equal(contar(truncado, CORPO_P3_SEGUNDO_EXCLUDE), 0, "o truncamento precisa remover o payload");
+  const result = runComFusivel(fixture({ vitest: `export default ${truncado};\n` }));
+  assertReprova(result, COBERTURA_ESCOPO);
+  assert.doesNotMatch(result.stderr, COBERTURA_DUPLICADA, "a classe não pode sobreviver ao apagamento");
+});
 
 // Fronteira do preâmbulo: nada além de espaço e comentário pode preceder o único
 // "export default".
@@ -1763,14 +1840,16 @@ const ESTRUTURA_DE_COBERTURA_RECUSADA = [
 
   // Chamarizes: valor forte que não pertence à cadeia efetiva.
   ["chamariz forte em comentário com limiares efetivos fracos", COBERTURA_LIMIAR, `// thresholds: { ${METRICAS_FORTES} }\n${comLimiares("lines: 0, branches: 0, functions: 0, statements: 0")}`],
-  // Os chamarizes que viviam DENTRO de `coverage` e de `thresholds` migraram
-  // para o nível `test`: lá a propriedade alheia continua tolerada, e a
-  // pergunta original — o valor forte fora da cadeia efetiva conta? — segue
-  // sendo respondida pela classe semântica, não pela forma.
-  ["chamariz forte em string no nível test com limiares efetivos fracos", COBERTURA_LIMIAR, exportDefault(`{ test: { nota: "${METRICAS_FORTES}", coverage: { ${STRONG_INCLUDE}, ${STRONG_EXCLUDE}, thresholds: { lines: 0, branches: 0, functions: 0, statements: 0 } } } }`)],
-  ["chamariz forte em propriedade alheia com limiares efetivos fracos", COBERTURA_LIMIAR, comChamarizEmTest(`{ thresholds: { ${METRICAS_FORTES} } }`, `{ ${STRONG_INCLUDE}, ${STRONG_EXCLUDE}, thresholds: { lines: 0, branches: 0, functions: 0, statements: 0 } }`)],
-  ["chamariz de include em objeto aninhado não associado à cadeia", COBERTURA_ESCOPO, comChamarizEmTest(`{ coverage: { ${STRONG_INCLUDE} } }`, `{ include: [], ${STRONG_EXCLUDE}, ${STRONG_THRESHOLDS} }`)],
-  ["cadeia completa em objeto aninhado e cadeia efetiva fraca", COBERTURA_ESCOPO, exportDefault(`{ define: ${CADEIA_FORTE}, test: { coverage: { include: [], ${STRONG_EXCLUDE}, ${STRONG_THRESHOLDS} } } }`)],
+  // Os chamarizes que viviam em propriedade alheia migraram para os dois
+  // carregadores que sobrevivem à gramática fechada: o comentário, que a
+  // varredura converte em espaço, e o TEXTO de um padrão de exclusão, lido
+  // DENTRO de `coverage`. O segundo é o que mantém viva a distinção
+  // string-versus-estrutura: ali o validador lê a string e a trata como
+  // caminho, nunca como par chave/valor da configuração.
+  ["chamariz forte em texto de padrão de exclusão com limiares efetivos fracos", COBERTURA_LIMIAR, cobertura(`${STRONG_INCLUDE}, exclude: ["docs/${METRICAS_FORTES}/**"], thresholds: { lines: 0, branches: 0, functions: 0, statements: 0 }`)],
+  ["chamariz forte em propriedade alheia com limiares efetivos fracos", COBERTURA_LIMIAR, comChamarizForaDaCadeia(`{ thresholds: { ${METRICAS_FORTES} } }`, `{ ${STRONG_INCLUDE}, ${STRONG_EXCLUDE}, thresholds: { lines: 0, branches: 0, functions: 0, statements: 0 } }`)],
+  ["chamariz de include em objeto aninhado não associado à cadeia", COBERTURA_ESCOPO, comChamarizForaDaCadeia(`{ coverage: { ${STRONG_INCLUDE} } }`, `{ include: [], ${STRONG_EXCLUDE}, ${STRONG_THRESHOLDS} }`)],
+  ["cadeia completa em comentário e cadeia efetiva fraca", COBERTURA_ESCOPO, `// define: ${CADEIA_FORTE}\n${exportDefault(`{ test: { coverage: { include: [], ${STRONG_EXCLUDE}, ${STRONG_THRESHOLDS} } } }`)}`],
 
   // Semântica das exclusões protegidas: qualquer caminho alcançável sob as raízes
   // declaradas na política reprova, e nenhum nome de subárvore é enumerado.
@@ -1800,12 +1879,15 @@ const ESTRUTURA_DE_COBERTURA_ACEITA = [
   ["objeto literal exportado diretamente", `export default ${CADEIA_FORTE};\n`],
   ["objeto literal exportado em várias linhas", VITEST],
   [
-    // `provider` e `perFile` saíram: `coverage` e `thresholds` passaram a ter
-    // gramática FECHADA. A intenção preservada é a outra metade da mesma regra —
-    // os níveis exportado e `test` continuam tolerando propriedade estática
-    // alheia, em qualquer posição.
-    "propriedades estáticas alheias nos níveis exportado e test",
-    `export default { plugins: [], test: { globals: true, coverage: { ${STRONG_INCLUDE}, ${STRONG_EXCLUDE}, thresholds: { ${METRICAS_FORTES} } }, reporters: ["default"] }, esbuild: { target: "es2022" } };\n`
+    // H3b3. O vetor que aprovava `plugins`, `globals`, `reporters` e `esbuild`
+    // virou negativo em NIVEL_FECHADO_RECUSADO: os níveis exportado e `test`
+    // também passaram a ter gramática fechada. O positivo que fica no lugar é a
+    // outra metade da mesma regra — o fechamento decide sobre ESTRUTURA, não
+    // sobre texto: o nome proibido escrito em comentário não é propriedade.
+    "nome de propriedade proibida citado em comentário",
+    `// plugins: [], esbuild: { target: "es2022" }\n${exportDefault(
+      `{ test: { coverage: { ${STRONG_INCLUDE}, ${STRONG_EXCLUDE}, ${STRONG_THRESHOLDS} } } }`
+    )}`
   ],
   ["limiares acima da política", comLimiares("lines: 100, branches: 100, functions: 100, statements: 100")],
   ["métricas em ordem invertida", comLimiares("statements: 80, functions: 80, branches: 75, lines: 80")],
@@ -2683,11 +2765,12 @@ for (const [nome, vitest] of RESIDUO_INOFENSIVO) {
   });
 }
 
-// --- Tarefa F. Valores NÃO INSPECIONADOS. Nos níveis exportado e `test` a
-// propriedade alheia continua tolerada, mas só quando é estruturalmente
-// estática: nada que execute código pode entrar por uma propriedade que o
-// validador não lê. Não há parser de JavaScript aqui — o critério é a ausência
-// do primitivo de chamada fora de literal textual.
+// --- Tarefa F. Formas EXECUTÁVEIS declaradas nos níveis exportado e `test`.
+// Estes vetores já reprovavam quando havia tolerância a valor não inspecionado,
+// e continuam reprovando depois do fechamento dos dois níveis — agora pelo
+// nome da propriedade, antes que o valor chegue a ser lido. São preservados
+// como controle de não regressão da classe: nenhuma delas pode passar a
+// aprovar, nem a produzir diagnóstico de outra classe.
 const VALOR_EXECUTAVEL = [
   [
     "expressão imediatamente invocada no nível exportado",
@@ -2740,34 +2823,125 @@ for (const [nome, corpo] of VALOR_EXECUTAVEL) {
   });
 }
 
-const VALOR_ESTATICO_TOLERADO = [
-  ["array vazio e booleano", `{ plugins: [], test: { globals: true, coverage: { ${COVERAGE_CANONICO} } } }`],
+// H3b3. Os DOIS níveis restantes foram FECHADOS: o objeto exportado declara
+// somente `test`, e `test` declara somente `coverage`. A tolerância genérica a
+// "valor não inspecionado estruturalmente estático" DEIXOU DE DEFINIR O
+// CONTRATO, e não por gosto: ela media a forma do VALOR, e o leitor só sabia
+// recusar o parêntese. `new Reporter`, um tagged template, um acessador
+// encadeado, um `await` e um identificador livre não têm parêntese nenhum e
+// entravam por uma propriedade que o validador não lê — executando com o
+// privilégio do runner assim que o Vitest carregasse o módulo. Pior: nomes
+// perfeitamente legítimos do Vitest (`setupFiles`, `globalSetup`, `reporters`,
+// `plugins`) fazem o runner IMPORTAR um arquivo escolhido pela candidata, e
+// `include: []` ou `passWithNoTests` esvaziam a medição sem tocar em
+// `coverage`. Nenhuma inspeção do valor separa esses casos; o NOME separa.
+//
+// O preço é assumido: propriedade legítima do Vitest reprova. Ampliar a
+// allowlist exige o PR próprio descrito em `docs/ai-engineering-system.md`.
+// A recusa não ecoa o nome nem o valor: o defeito é a forma.
+const NIVEL_FECHADO_RECUSADO = [
+  // (a) Carregamento de módulo. Cada uma faz o runner importar e executar um
+  // arquivo apontado pela candidata, sem nenhum parêntese na configuração.
+  ["setupFiles no nível test", `{ test: { setupFiles: ["./s.ts"], coverage: { ${COVERAGE_CANONICO} } } }`],
+  ["globalSetup no nível test", `{ test: { globalSetup: ["./g.ts"], coverage: { ${COVERAGE_CANONICO} } } }`],
+  ["reporters no nível test", `{ test: { reporters: ["./r.ts"], coverage: { ${COVERAGE_CANONICO} } } }`],
   [
-    "número, nulo e texto",
-    `{ porta: 5173, alias: null, raiz: "./app", test: { coverage: { ${COVERAGE_CANONICO} } } }`
+    "snapshotSerializers no nível test",
+    `{ test: { snapshotSerializers: ["./x.ts"], coverage: { ${COVERAGE_CANONICO} } } }`
   ],
+  ["plugins no nível exportado", `{ plugins: ["./p.ts"], test: { coverage: { ${COVERAGE_CANONICO} } } }`],
+  ["globalSetup no nível exportado", `{ globalSetup: ["./g.ts"], test: { coverage: { ${COVERAGE_CANONICO} } } }`],
+
+  // (b) Seleção ou supressão de testes. Esvaziam a medição sem alterar um único
+  // limiar: a cobertura continua "forte" sobre um conjunto vazio.
+  ["include vazio no nível test", `{ test: { include: [], coverage: { ${COVERAGE_CANONICO} } } }`],
+  ["exclude do código no nível test", `{ test: { exclude: ["src/**"], coverage: { ${COVERAGE_CANONICO} } } }`],
+  ["passWithNoTests no nível test", `{ test: { passWithNoTests: true, coverage: { ${COVERAGE_CANONICO} } } }`],
+  ["bail no nível test", `{ test: { bail: 1, coverage: { ${COVERAGE_CANONICO} } } }`],
+  ["testTimeout no nível test", `{ test: { testTimeout: 1, coverage: { ${COVERAGE_CANONICO} } } }`],
+
+  // (c) Expressões executáveis SEM parêntese — a classe inteira que o leitor de
+  // valor estático deixava passar. Todas com sintaxe válida de módulo ES.
+  ["tagged template no nível test", `{ test: { x: sql\`select 1\`, coverage: { ${COVERAGE_CANONICO} } } }`],
+  ["new sem lista de argumentos no nível test", `{ test: { x: new Reporter, coverage: { ${COVERAGE_CANONICO} } } }`],
+  ["new sobre membro no nível test", `{ test: { x: new mod.Reporter, coverage: { ${COVERAGE_CANONICO} } } }`],
+  ["acesso a membro por ponto no nível test", `{ test: { x: modulo.prop, coverage: { ${COVERAGE_CANONICO} } } }`],
   [
-    "objeto aninhado estático",
+    "acesso a membro por colchete no nível test",
+    `{ test: { x: modulo["prop"], coverage: { ${COVERAGE_CANONICO} } } }`
+  ],
+  ["função de seta sem parêntese no nível test", `{ test: { x: v => v, coverage: { ${COVERAGE_CANONICO} } } }`],
+  [
+    "atribuição a objeto global no nível test",
+    `{ test: { x: globalThis.__PWN__ = 1, coverage: { ${COVERAGE_CANONICO} } } }`
+  ],
+  ["duas chaves livres em sequência no nível test", `{ test: { x: 1, y: 2, coverage: { ${COVERAGE_CANONICO} } } }`],
+  ["await de promessa no nível test", `{ test: { x: await promessa, coverage: { ${COVERAGE_CANONICO} } } }`],
+  ["template literal no nível test", `{ test: { x: \`texto\`, coverage: { ${COVERAGE_CANONICO} } } }`],
+
+  // (d) Dados PASSIVOS. Também reprovam, e isso é a consequência assumida do
+  // critério por nome: o validador não distingue dado de gatilho sem ler valor.
+  [
+    "resolve.alias no nível exportado",
     `{ resolve: { alias: { "@": "./src" } }, test: { coverage: { ${COVERAGE_CANONICO} } } }`
   ],
   [
-    "array de objetos estáticos no nível test",
+    "esbuild.target no nível exportado",
+    `{ esbuild: { target: "es2022" }, test: { coverage: { ${COVERAGE_CANONICO} } } }`
+  ],
+  ["globals no nível test", `{ test: { globals: true, coverage: { ${COVERAGE_CANONICO} } } }`],
+  ["environment no nível test", `{ test: { environment: "node", coverage: { ${COVERAGE_CANONICO} } } }`],
+
+  // (e) Os SEIS vetores que a tolerância genérica aprovava, preservados letra
+  // por letra e com a polaridade invertida. Nenhum foi apagado: o que mudou é
+  // a resposta, e o nome do teste diz qual é a nova recusa.
+  [
+    "antes tolerado: array vazio e booleano",
+    `{ plugins: [], test: { globals: true, coverage: { ${COVERAGE_CANONICO} } } }`
+  ],
+  [
+    "antes tolerado: número, nulo e texto",
+    `{ porta: 5173, alias: null, raiz: "./app", test: { coverage: { ${COVERAGE_CANONICO} } } }`
+  ],
+  [
+    "antes tolerado: objeto aninhado estático",
+    `{ resolve: { alias: { "@": "./src" } }, test: { coverage: { ${COVERAGE_CANONICO} } } }`
+  ],
+  [
+    "antes tolerado: array de objetos estáticos no nível test",
     `{ test: { projetos: [{ nome: "a" }, { nome: "b" }], coverage: { ${COVERAGE_CANONICO} } } }`
   ],
   [
-    "parênteses dentro de literal textual",
+    "antes tolerado: parênteses dentro de literal textual",
     `{ nota: "carregar()", test: { nota: "f(x)", coverage: { ${COVERAGE_CANONICO} } } }`
   ],
-  ["identificador como valor estático", `{ test: { ambiente: PADRAO, coverage: { ${COVERAGE_CANONICO} } } }`]
+  [
+    "antes tolerado: identificador livre como valor",
+    `{ test: { ambiente: PADRAO, coverage: { ${COVERAGE_CANONICO} } } }`
+  ],
+  [
+    "antes tolerado: propriedades alheias nos níveis exportado e test",
+    `{ plugins: [], test: { globals: true, coverage: { ${COVERAGE_CANONICO} }, reporters: ["default"] }, esbuild: { target: "es2022" } }`
+  ]
 ];
 
-for (const [nome, corpo] of VALOR_ESTATICO_TOLERADO) {
-  test(`aceita valor não inspecionado estruturalmente estático — ${nome}`, () => {
-    const result = runComFusivel(fixture({ vitest: exportDefault(corpo) }));
-    assert.equal(result.status, 0, result.stderr);
-    assert.equal(result.stdout.trim(), APROVACAO);
+for (const [nome, corpo] of NIVEL_FECHADO_RECUSADO) {
+  test(`recusa propriedade fora dos níveis fechados — ${nome}`, () => {
+    const vitest = exportDefault(corpo);
+    const fx = fixture({ vitest });
+    const result = runComFusivel(fx);
+    assertFormaNaoCanonica(result, fx, vitest);
+    assert.doesNotMatch(`${result.stdout}${result.stderr}`, /NÃO_EXECUTAR|__PWN__/u);
   });
 }
+
+// Controle positivo do mesmo contrato: a cadeia canônica mínima continua
+// aprovando, e nada dentro de `coverage` mudou.
+test("aceita a cadeia canônica mínima sob os níveis fechados", () => {
+  const result = runComFusivel(fixture({ vitest: exportDefault(`{ test: { coverage: { ${COVERAGE_CANONICO} } } }`) }));
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), APROVACAO);
+});
 
 // O contrato do LINT não muda: lá o valor não inspecionado continua tolerado,
 // inclusive quando é executável, porque é o que prova que o módulo não é

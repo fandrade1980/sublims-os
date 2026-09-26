@@ -663,54 +663,16 @@ function readSkippedValue(source, start, erros = ERROS_LINT) {
   return end;
 }
 
-// Valor de propriedade NÃO INSPECIONADA nos níveis exportado e `test`. O
-// validador não lê esse valor, então a única garantia possível sobre ele é
-// ESTRUTURAL: ele pode existir, mas não pode EXECUTAR. Tolerar qualquer coisa
-// balanceada dava ao arquivo um lugar onde `(() => { ... })()`,
-// `await import("...")`, `process.exit(0)` ou uma chamada comum rodariam com o
-// privilégio do runner assim que o Vitest carregasse o módulo — exatamente o
-// que a regra do preâmbulo impede antes do `export default`.
+// H3b3. Aqui vivia `readValorEstatico`, o leitor de valor de propriedade NÃO
+// INSPECIONADA dos níveis exportado e `test`. Ele saiu junto com a tolerância
+// que servia: sem nível aberto, nenhuma propriedade desconhecida chega a ter o
+// valor lido, e o código ficaria inalcançável. Saíram com ele
+// `fimDeValorEstatico` e os conjuntos `ABRE_LITERAL`, `ABRE_DELIMITADOR` e
+// `PARENTESE_DE_CHAMADA`, que não tinham outro chamador. `FECHAMENTOS` e
+// `skipQuoted` continuam, porque são compartilhados com `skipValue`.
 //
-// A recusa NÃO é um parser de JavaScript: o primitivo de execução da linguagem
-// é a chamada, e toda forma executável precisa do parêntese. Recusar o
-// parêntese FORA de literal textual fecha a classe inteira — IIFE, importação
-// dinâmica, chamada, função de seta — sem enumerar nomes e sem interpretar
-// expressão nenhuma. O validador continua só equilibrando delimitadores, e
-// "carregar()" dentro de aspas continua sendo dado.
-const ABRE_LITERAL = new Set(['"', "'", "`"]);
-const ABRE_DELIMITADOR = new Set(["[", "{"]);
-const PARENTESE_DE_CHAMADA = new Set(["(", ")"]);
-
-// O valor termina na vírgula do próprio objeto ou no "}" que o fecha.
-// Delimitador desequilibrado não descreve valor nenhum e reprova.
-function fimDeValorEstatico(character, stack, erros) {
-  if (character === "," && !stack.length) return true;
-  if (!FECHAMENTOS.has(character)) return false;
-  if (!stack.length) {
-    if (character !== "}") throw new Error(erros.naoCanonico);
-    return true;
-  }
-  if (stack.pop() !== FECHAMENTOS.get(character)) throw new Error(erros.naoCanonico);
-  return false;
-}
-
-function readValorEstatico(source, start, erros) {
-  const stack = [];
-  let index = start;
-  while (index < source.length) {
-    const character = source[index];
-    if (ABRE_LITERAL.has(character)) {
-      index = skipQuoted(source, index);
-      if (index === -1) throw new Error(erros.naoCanonico);
-      continue;
-    }
-    if (PARENTESE_DE_CHAMADA.has(character)) throw new Error(erros.naoCanonico);
-    if (ABRE_DELIMITADOR.has(character)) stack.push(character);
-    else if (fimDeValorEstatico(character, stack, erros)) return index;
-    index += 1;
-  }
-  throw new Error(erros.naoCanonico);
-}
+// O registro da retirada importa: o critério dele era a ausência de parêntese,
+// e essa era a garantia fraca que o fechamento substituiu.
 
 // Literal textual sem escape: a grafia canônica da severidade e da variante é
 // direta, e "\x65rror" só seria conhecido depois de avaliar o módulo.
@@ -1388,15 +1350,27 @@ function inicioDoObjetoExportado(source) {
 // chave dinâmica reprovam em `readProperty`, e chave repetida reprova antes que
 // a última declaração vença.
 //
-// `fechado` separa os dois regimes. Nos níveis exportado e `test` o arquivo tem
-// motivo legítimo para declarar propriedades que este validador não conhece, e
-// elas são toleradas enquanto forem estruturalmente estáticas. Em `coverage` e
-// em `thresholds` NÃO existe esse motivo: ali toda chave adicional é uma opção
-// do consumidor que muda o resultado do gate sem passar por comparação alguma
-// — `all`, `provider`, `enabled`, limiar por arquivo — e descartá-la como valor
-// não inspecionado aprovava exatamente a configuração que esvaziava a medição.
+// H3b3. NÃO existe mais regime tolerante: todos os níveis inspecionados são
+// fechados. O objeto exportado declara somente `test`; `test` declara somente
+// `coverage`; `coverage` e `thresholds` já eram fechados. O parâmetro que
+// selecionava o regime saiu junto com o regime.
+//
+// A tolerância anterior supunha que os dois níveis externos tinham motivo
+// legítimo para declarar propriedades desconhecidas, desde que o VALOR fosse
+// estruturalmente estático. A suposição não se sustenta por duas razões
+// independentes. Primeira: a garantia sobre o valor era fraca por construção —
+// o critério era a ausência de parêntese, e `new Reporter`, um tagged template,
+// `globalThis.x = 1`, `await p` e um identificador livre executam sem nenhum
+// parêntese. Segunda, e decisiva: o dano não precisa de execução. `setupFiles`,
+// `globalSetup`, `reporters`, `snapshotSerializers` e `plugins` fazem o runner
+// IMPORTAR um arquivo escolhido pela candidata, e `include: []`, `exclude` e
+// `passWithNoTests` esvaziam a medição sem tocar em `coverage`. Nenhuma
+// inspeção do valor separa esses nomes de um dado inerte; o NOME separa.
+//
+// O preço é assumido: propriedade legítima do Vitest reprova, e ampliar o
+// conjunto exige o PR próprio descrito em `docs/ai-engineering-system.md`.
 // A recusa não ecoa o nome nem o valor da chave: o defeito é a forma.
-function nivelDeCobertura(source, inicio, procuradas, fechado = false) {
+function nivelDeCobertura(source, inicio, procuradas) {
   if (source[inicio] !== "{") throw new Error(COBERTURA_NAO_CANONICA);
   const encontradas = new Map();
   const fim = readObjectProperties(
@@ -1407,8 +1381,7 @@ function nivelDeCobertura(source, inicio, procuradas, fechado = false) {
         encontradas.set(name, value);
         return readSkippedValue(source, value, ERROS_COBERTURA);
       }
-      if (fechado) throw new Error(COBERTURA_NAO_CANONICA);
-      return readValorEstatico(source, value, ERROS_COBERTURA);
+      throw new Error(COBERTURA_NAO_CANONICA);
     },
     ERROS_COBERTURA
   );
@@ -1428,7 +1401,7 @@ function lerCadeiaDeCobertura(source) {
   const topo = nivelDeCobertura(source, inicioDoObjetoExportado(source), new Set(["test"]));
   const test = nivelDeCobertura(source, descer(source, topo.encontradas, "test"), new Set(["coverage"]));
   const coverage = descer(source, test.encontradas, "coverage");
-  return { cobertura: nivelDeCobertura(source, coverage, CHAVES_DE_COBERTURA, true).encontradas, fim: topo.fim };
+  return { cobertura: nivelDeCobertura(source, coverage, CHAVES_DE_COBERTURA).encontradas, fim: topo.fim };
 }
 
 // Trecho residual depois do objeto exportado, com a MESMA disciplina já
