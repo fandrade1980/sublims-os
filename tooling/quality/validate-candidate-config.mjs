@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve, sep } from "node:path";
 
 const MAX_CANDIDATE_BYTES = 1024 * 1024;
 const MAX_IGNORE_ARRAYS = 50;
@@ -21,8 +21,8 @@ function parseArguments(argv) {
   const values = new Map();
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index];
-    if (flag !== "--candidate" && flag !== "--policy") {
-      throw new Error(flag.startsWith("--") ? "argumento inválido" : "uso: informe --candidate e --policy");
+    if (flag !== "--candidate" && flag !== "--trusted") {
+      throw new Error(flag.startsWith("--") ? "argumento inválido" : "uso: informe --candidate e --trusted");
     }
     if (values.has(flag)) throw new Error(`argumento repetido: ${flag}`);
     const value = argv[index + 1];
@@ -32,10 +32,67 @@ function parseArguments(argv) {
     values.set(flag, value);
     index += 1;
   }
-  if (!values.has("--candidate") || !values.has("--policy")) {
-    throw new Error("uso: informe --candidate e --policy");
+  if (!values.has("--candidate") || !values.has("--trusted")) {
+    throw new Error("uso: informe --candidate e --trusted");
   }
   return values;
+}
+
+// Filesystem sem distinção de caixa. Em win32 `Candidate` e `candidate` são o MESMO
+// diretório no disco; comparar segmentos por texto exato os veria como disjuntos e a
+// árvore candidata, acessada por uma grafia que difere só na caixa, poderia suprir a
+// configuração que o gate trata como confiável — a autoaprovação por colisão de caixa.
+// A dobra é CONDICIONADA à plataforma: em filesystem case-sensitive (Linux, o CI de
+// governance em Ubuntu) as duas grafias são diretórios genuinamente distintos e
+// precisam continuar disjuntos. Decisão de plano: dobra de caixa, NÃO `realpath` —
+// symlink e UNC permanecem fora de escopo. `toLowerCase` é determinístico e
+// suficiente aqui; nenhuma comparação depende de locale.
+const FILESYSTEM_INSENSIVEL_A_CAIXA = process.platform === "win32";
+
+function dobraDeCaixa(segmento) {
+  return FILESYSTEM_INSENSIVEL_A_CAIXA ? segmento.toLowerCase() : segmento;
+}
+
+// Segmentos de caminho canônicos de uma raiz já resolvida. Divide pelo separador da
+// plataforma e descarta segmentos vazios — o resíduo de barras repetidas ou finais —,
+// de modo que a comparação seja por NOME de componente, nunca por texto. Em filesystem
+// sem distinção de caixa cada segmento é dobrado, para que a comparação enxergue o
+// mesmo diretório sob grafias que diferem só na caixa. Symlink e realpath ficam fora
+// de escopo: as raízes chegam apenas por `resolve`, e uma junção via link simbólico
+// não é normalizada aqui.
+function segmentosDaRaiz(root) {
+  return root
+    .split(sep)
+    .filter((segmento) => segmento !== "")
+    .map(dobraDeCaixa);
+}
+
+// Uma raiz é prefixo POR SEGMENTO da outra quando toda a sequência de componentes da
+// mais curta reaparece, na mesma ordem e desde o início, na mais longa. É a checagem
+// que distingue sobreposição real de mera coincidência textual: `candidate-2` não é
+// prefixo de `candidate`, porque `["candidate-2"]` e `["candidate"]` diferem no
+// primeiro segmento — enquanto uma comparação por prefixo de string aceitaria a
+// coincidência e recusaria irmãos legítimos. Raízes idênticas caem aqui também, pois
+// cada uma é prefixo da outra. Os segmentos já chegam dobrados quando o filesystem é
+// case-insensitive, de modo que a igualdade `===` fica sem distinção de caixa lá.
+function prefixoPorSegmento(curta, longa) {
+  if (curta.length > longa.length) return false;
+  return curta.every((segmento, indice) => segmento === longa[indice]);
+}
+
+// A raiz confiável e a candidata precisam ser inequívocas e disjuntas. Se uma contém
+// a outra — ou se coincidem —, a árvore candidata pode suprir a configuração que o
+// gate trata como confiável, e a verificação se autoaprova. A recusa é por segmentos
+// canônicos, nunca por prefixo textual, e tem classe própria para descrever o defeito
+// real: fronteira violada, não valor incompatível.
+function assertRaizesDisjuntas(trusted, candidate) {
+  const segmentosTrusted = segmentosDaRaiz(trusted);
+  const segmentosCandidate = segmentosDaRaiz(candidate);
+  const curta = segmentosTrusted.length <= segmentosCandidate.length ? segmentosTrusted : segmentosCandidate;
+  const longa = curta === segmentosTrusted ? segmentosCandidate : segmentosTrusted;
+  if (prefixoPorSegmento(curta, longa)) {
+    throw new Error("raízes confiável e candidata não podem coincidir nem se sobrepor");
+  }
 }
 
 function readText(file) {
@@ -1751,12 +1808,21 @@ function assertDependencies(config, policy) {
 try {
   const options = parseArguments(process.argv.slice(2));
   const candidate = resolve(options.get("--candidate"));
-  const policyFile = resolve(options.get("--policy"));
-  const policy = readJson(policyFile);
+  const trusted = resolve(options.get("--trusted"));
+  // Fronteira de confiança ANTES de qualquer leitura: nenhum arquivo confiável é
+  // indicável por argumento, e as duas raízes precisam ser disjuntas. Sem isso a
+  // árvore candidata poderia apontar a própria configuração como confiável — o
+  // `dependency-cruiser.json` e a `policy.json` sob ela — e o gate se autoaprovaria.
+  assertRaizesDisjuntas(trusted, candidate);
+  // Os dois arquivos confiáveis são resolvidos EXCLUSIVAMENTE sob a raiz confiável,
+  // como `compare-policy.mjs` já faz: a política em `quality/policy.json` e as regras
+  // de dependência em `tooling/toolchain/dependency-cruiser.json`. `quality:dependencies`
+  // tem origem `base`, e por isso o `dependency-cruiser.json` vem da raiz confiável, não
+  // do candidato — a divergência registrada em `docs/ai-engineering-system.md`.
+  const policy = readJson(join(trusted, "quality", "policy.json"));
+  const dependencyConfig = readJson(join(trusted, "tooling", "toolchain", "dependency-cruiser.json"));
   const vitest = readCandidateText(join(candidate, "vitest.config.ts"));
   const eslint = readCandidateText(join(candidate, "eslint.config.mjs"));
-  const trustedRoot = resolve(dirname(policyFile), "..");
-  const dependencyConfig = readJson(join(trustedRoot, "tooling", "toolchain", "dependency-cruiser.json"));
   assertCoverage(vitest, policy);
   assertLint(eslint, policy);
   assertDependencies(dependencyConfig, policy);

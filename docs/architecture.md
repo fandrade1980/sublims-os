@@ -8,7 +8,7 @@ O frontend e as operações de aplicação podem viver no mesmo projeto. Regras 
 
 ## Tratamento do protótipo analisado
 
-O diretório `buffet-mvp` é um protótipo exploratório. Ele comprova nomenclaturas de tela e parte do fluxo, mas não deve ser promovido diretamente a produção porque:
+`buffet-mvp` é um protótipo exploratório **arquivado fora deste repositório**; não é um diretório deste projeto. Nenhum arquivo, schema, histórico git ou arquivo de ambiente dele é importado para cá. Ele comprova nomenclaturas de tela e parte do fluxo, mas não deve ser promovido diretamente a produção porque:
 
 - cálculos financeiros estão dentro de páginas React e usam números de ponto flutuante;
 - eventos são recalculados com o preço atual dos ingredientes, sem retrato histórico;

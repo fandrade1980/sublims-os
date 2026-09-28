@@ -115,8 +115,12 @@ Hoje o registro nasce vazio: `{"version":1,"exceptions":[]}`. Nenhum afrouxament
 `tooling/quality/validate-candidate-config.mjs` confere a configuração declarada pelo candidato contra a política:
 
 ```text
-node tooling/quality/validate-candidate-config.mjs --candidate <raiz-candidata> --policy <política>
+node tooling/quality/validate-candidate-config.mjs --candidate <raiz-candidata> --trusted <raiz-confiável>
 ```
+
+As duas raízes são obrigatórias e **precisam ser disjuntas**: nenhuma pode coincidir com a outra nem contê-la. A comparação é por **segmentos de caminho canônicos**, não por prefixo textual — `candidate-2` não é sobreposição de `candidate` —, e a violação reprova por classe própria, antes de qualquer leitura. Em filesystem sem distinção de caixa (Windows), a comparação dos segmentos é feita **sem distinção de caixa**, de modo que `Candidate` e `candidate` — o mesmo diretório no disco — não escapam da fronteira por diferirem apenas na grafia; em filesystem case-sensitive as duas grafias são diretórios distintos e permanecem disjuntas. A garantia de disjunção não depende, portanto, de plataforma. Nenhum arquivo confiável é indicável por argumento: sob a raiz confiável, o validador resolve internamente `quality/policy.json` e `tooling/toolchain/dependency-cruiser.json`, como `tooling/quality/compare-policy.mjs` já faz. Se a raiz confiável pudesse ser derivada de um caminho sob a árvore candidata, a candidata forneceria a própria configuração "confiável" e o gate se autoaprovaria.
+
+**Divergência registrada com o Item 4 da spec.** O Item 4 descreve o validador examinando "a configuração candidata sem importar nem avaliar esses arquivos" e exige que "as quatro regras de dependência declaradas em `quality/policy.json` precisam estar presentes com severidade de erro". As regras de dependência efetivamente conferidas vêm de `tooling/toolchain/dependency-cruiser.json` **da raiz confiável**, não do candidato, porque o gate `quality:dependencies` é declarado com `origin: base` (Item 3): a ferramenta e sua configuração pertencem à base, e tratar o `dependency-cruiser.json` do candidato como autoridade contradiria a origem `base`. O texto do Item 4 pode ser lido como se esse arquivo fosse candidato; a implementação o lê da base, e esta linha fixa a leitura correta sem alterar a spec.
 
 A inspeção é **estática**. O conteúdo é lido como texto e analisado por correspondência de padrão e varredura de delimitadores balanceados. Nada é importado, avaliado ou executado — ler configuração do candidato executando-a seria dar a ele o controle que o gate pretende verificar.
 

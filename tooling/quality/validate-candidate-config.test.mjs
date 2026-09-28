@@ -94,11 +94,16 @@ function fixture({ vitest = VITEST, eslint = ESLINT, dependency = dependencyConf
     writeFileSync(join(trusted, "tooling", "toolchain", "dependency-cruiser.json"), JSON.stringify(dependency));
   }
   writeFileSync(join(trusted, "quality", "policy.json"), JSON.stringify(policy));
-  return { candidate, policy: join(trusted, "quality", "policy.json") };
+  // A raiz confiável é EXPOSTA: a interface aponta `--trusted <raiz>`, e é sob ela
+  // que o validador resolve `quality/policy.json` e `tooling/toolchain/dependency-cruiser.json`.
+  // `candidate` e `trusted` são diretórios irmãos sob a mesma raiz temporária, disjuntos
+  // por segmento — nenhum é prefixo do outro —, de modo que a fronteira de confiança é
+  // respeitada por construção.
+  return { candidate, trusted };
 }
 
 function run(fx, extras = []) {
-  return spawnSync(process.execPath, [cli, "--candidate", fx.candidate, "--policy", fx.policy, ...extras], {
+  return spawnSync(process.execPath, [cli, "--candidate", fx.candidate, "--trusted", fx.trusted, ...extras], {
     encoding: "utf8"
   });
 }
@@ -690,7 +695,7 @@ const LIMITE_ARQUIVO =
 
 // Fusível contra processo residual. Nunca é a asserção principal de um teste.
 function runComFusivel(fx) {
-  return spawnSync(process.execPath, [cli, "--candidate", fx.candidate, "--policy", fx.policy], {
+  return spawnSync(process.execPath, [cli, "--candidate", fx.candidate, "--trusted", fx.trusted], {
     encoding: "utf8",
     timeout: 20_000,
     killSignal: "SIGKILL"
@@ -2662,9 +2667,10 @@ for (const metrica of ["lines", "branches", "functions", "statements"]) {
 }
 
 // --- Tarefa D. Política confiável incompleta. O arranjo é montado com uma CÓPIA
-// FIEL do que o validador lê a partir da raiz confiável: a política apontada por
-// `--policy` e `tooling/toolchain/dependency-cruiser.json`, resolvido em
-// `dirname(--policy)/..`. A fidelidade é provada ANTES de qualquer mutação.
+// FIEL do que o validador lê a partir da raiz confiável apontada por `--trusted`:
+// `quality/policy.json` e `tooling/toolchain/dependency-cruiser.json`, ambos
+// resolvidos internamente sob essa raiz. A fidelidade é provada ANTES de qualquer
+// mutação.
 const RAIZ_DO_REPOSITORIO = fileURLToPath(new URL("../../", import.meta.url));
 const POLITICA_REAL = JSON.parse(readFileSync(join(RAIZ_DO_REPOSITORIO, "quality", "policy.json"), "utf8"));
 const DEPENDENCIAS_REAIS = JSON.parse(
@@ -4426,3 +4432,201 @@ for (const [nome, corpo] of LIMIARES_ACEITOS) {
     assert.equal(result.stdout.trim(), APROVACAO);
   });
 }
+
+// --- Fronteira de confiança (M2). A raiz confiável precisa ser inequívoca e
+// jamais indicável pela árvore candidata. Enquanto a raiz confiável for derivada
+// de um argumento que o candidato controla, uma árvore candidata pode suprir a
+// própria configuração "confiável" e o gate se autoaprova — três regras de
+// dependência a menos, limiares zerados e complexidade ilimitada passando como
+// compatíveis. A recusa da fronteira tem CLASSE PRÓPRIA — nem limiar, nem
+// dependência, nem argumento inválido — para que a mensagem aponte o defeito
+// real: raízes sobrepostas, não valor.
+const RAIZES_SOBREPOSTAS =
+  /Configuração candidata reprovada: raízes confiável e candidata não podem coincidir nem se sobrepor/u;
+
+// Uma política deliberadamente enfraquecida: uma única regra de dependência no
+// lugar das quatro que a base exige, limiares de cobertura zerados e complexidade
+// praticamente ilimitada, com o `dependency-cruiser.json` afrouxado na mesma
+// proporção. Os dois são internamente coerentes, de modo que — se a raiz confiável
+// fosse a própria árvore candidata — o gate leria esse par afrouxado como confiável
+// e aprovaria três regras a menos sem sinal algum.
+const REGRA_UNICA = "domain-not-to-ui";
+const POLITICA_ENFRAQUECIDA = {
+  ...POLICY,
+  coverage: { ...POLICY.coverage, lines: 0, branches: 0, functions: 0, statements: 0 },
+  complexity: { maxCyclomaticPerFunction: 9999 },
+  dependencies: { rules: [REGRA_UNICA] }
+};
+const DEPENDENCIA_ENFRAQUECIDA = {
+  forbidden: [{ name: REGRA_UNICA, severity: "error", from: {}, to: {} }],
+  options: {}
+};
+const ESLINT_ENFRAQUECIDO = ESLINT.replace("max: 10", "max: 9999");
+
+// Monta uma árvore ÚNICA que serve simultaneamente de candidata e de "confiável":
+// além dos arquivos candidatos, escreve, sob a MESMA raiz, uma `quality/policy.json`
+// e um `tooling/toolchain/dependency-cruiser.json` enfraquecidos, coerentes entre si.
+// Se a raiz confiável pudesse ser esta árvore, o gate leria o par afrouxado como
+// confiável e se autoaprovaria.
+function arvoreCandidataComConfiguracaoPropria() {
+  const root = mkdtempSync(join(tmpdir(), "candidate-selfapprove-"));
+  mkdirSync(join(root, "quality"), { recursive: true });
+  mkdirSync(join(root, "tooling", "toolchain"), { recursive: true });
+  writeFileSync(join(root, "vitest.config.ts"), VITEST);
+  writeFileSync(join(root, "eslint.config.mjs"), ESLINT_ENFRAQUECIDO);
+  writeFileSync(join(root, "quality", "policy.json"), JSON.stringify(POLITICA_ENFRAQUECIDA));
+  writeFileSync(
+    join(root, "tooling", "toolchain", "dependency-cruiser.json"),
+    JSON.stringify(DEPENDENCIA_ENFRAQUECIDA)
+  );
+  return root;
+}
+
+// Fatia B, migração do RED. Raízes COINCIDENTES: `--candidate` e `--trusted` apontam
+// a MESMA árvore afrouxada. Antes da correção esta era a autoaprovação M2; depois, a
+// fronteira recusa por classe própria, antes de ler qualquer arquivo confiável, e
+// nenhuma linha de aprovação é emitida.
+test("recusa quando a raiz confiável coincide com a árvore candidata", () => {
+  const root = arvoreCandidataComConfiguracaoPropria();
+  const result = spawnSync(
+    process.execPath,
+    [cli, "--candidate", root, "--trusted", root],
+    { encoding: "utf8" }
+  );
+  assert.notEqual(result.status, 0, "gate se autoaprovou com raízes coincidentes");
+  assert.match(result.stderr, RAIZES_SOBREPOSTAS, "a recusa não foi da classe própria de fronteira");
+  assert.doesNotMatch(result.stdout, /compatível com a política confiável/u, "linha de aprovação foi emitida");
+  assert.doesNotMatch(`${result.stdout}${result.stderr}`, /\n\s+at\s/u);
+});
+
+// Fatia B, migração do RED. Raízes SOBREPOSTAS: `--trusted` aponta um subdiretório
+// da árvore candidata. Nenhuma invocação pode fazer a árvore candidata servir de
+// fonte confiável. A rejeição precisa ser da CLASSE PRÓPRIA da fronteira, não um
+// genérico `status != 0` que "argumento inválido" satisfaria por acidente — e por
+// isso exigimos a classe própria e a ausência da linha de aprovação.
+test("nenhuma invocação faz a árvore candidata servir de fonte confiável", () => {
+  const root = arvoreCandidataComConfiguracaoPropria();
+  const result = spawnSync(
+    process.execPath,
+    [cli, "--candidate", root, "--trusted", join(root, "quality")],
+    { encoding: "utf8" }
+  );
+  assert.notEqual(result.status, 0, "candidato apontou a própria configuração como confiável e o gate aprovou");
+  assert.match(result.stderr, RAIZES_SOBREPOSTAS, "a recusa não foi da classe própria de fronteira");
+  assert.doesNotMatch(result.stdout, /compatível com a política confiável/u, "linha de aprovação foi emitida");
+});
+
+// Fronteira por SEGMENTO, não por prefixo textual: `candidate` e `candidate-2` são
+// irmãos legítimos. Uma raiz confiável irmã, cujo NOME apenas começa com o nome da
+// candidata, não é sobreposição e precisa ser aceita — do contrário a checagem
+// recusaria árvores disjuntas por mera coincidência de texto. Aqui a confiável irmã
+// é bem formada, então o gate APROVA.
+test("aceita raízes irmãs cujo nome apenas coincide como prefixo textual", () => {
+  const base = mkdtempSync(join(tmpdir(), "irmas-"));
+  const candidate = join(base, "candidate");
+  const trusted = join(base, "candidate-2");
+  mkdirSync(join(candidate, "tooling", "toolchain"), { recursive: true });
+  mkdirSync(join(trusted, "quality"), { recursive: true });
+  mkdirSync(join(trusted, "tooling", "toolchain"), { recursive: true });
+  writeFileSync(join(candidate, "vitest.config.ts"), VITEST);
+  writeFileSync(join(candidate, "eslint.config.mjs"), ESLINT);
+  writeFileSync(join(trusted, "quality", "policy.json"), JSON.stringify(POLICY));
+  writeFileSync(
+    join(trusted, "tooling", "toolchain", "dependency-cruiser.json"),
+    JSON.stringify(dependencyConfig())
+  );
+  const result = spawnSync(process.execPath, [cli, "--candidate", candidate, "--trusted", trusted], {
+    encoding: "utf8"
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), APROVACAO);
+});
+
+// Colisão de CAIXA em filesystem case-insensitive. Só existe como defeito onde o
+// filesystem trata `Candidate` e `candidate` como o MESMO diretório físico — em
+// win32, a plataforma corrente. Ali, `--candidate <base>/Candidate` e
+// `--trusted <base>/candidate` apontam a mesma árvore afrouxada por duas grafias
+// que diferem apenas na caixa: a comparação por segmento case-sensitive as via
+// como disjuntas e o gate lia a política enfraquecida da própria candidata como
+// confiável — a autoaprovação M2 reaberta. A fronteira precisa recusar por classe
+// própria, antes de ler qualquer arquivo confiável, e sem emitir aprovação.
+//
+// Skip nominal fora de win32: em filesystem case-sensitive (Linux, o CI de
+// governance em Ubuntu) `Candidate` e `candidate` são diretórios GENUINAMENTE
+// distintos, e apontar `--trusted` para uma árvore confiável válida distinta é
+// aprovação legítima, não defeito. Este caso simplesmente não existe lá; forçá-lo
+// mascararia irmãos legítimos como sobreposição. Precedente do skip por
+// plataforma: os vetores de FIFO em `snapshot.test.mjs`.
+function colisaoDeCaixaSkip() {
+  return process.platform === "win32" ? false : "colisão de caixa só ocorre em filesystem case-insensitive (win32)";
+}
+
+test(
+  "recusa colisão de caixa em filesystem case-insensitive",
+  { skip: colisaoDeCaixaSkip() },
+  () => {
+    const base = mkdtempSync(join(tmpdir(), "colisao-caixa-"));
+    // UMA árvore física afrouxada, criada com a grafia em caixa alta.
+    const root = join(base, "Candidate");
+    mkdirSync(join(root, "quality"), { recursive: true });
+    mkdirSync(join(root, "tooling", "toolchain"), { recursive: true });
+    writeFileSync(join(root, "vitest.config.ts"), VITEST);
+    writeFileSync(join(root, "eslint.config.mjs"), ESLINT_ENFRAQUECIDO);
+    writeFileSync(join(root, "quality", "policy.json"), JSON.stringify(POLITICA_ENFRAQUECIDA));
+    writeFileSync(
+      join(root, "tooling", "toolchain", "dependency-cruiser.json"),
+      JSON.stringify(DEPENDENCIA_ENFRAQUECIDA)
+    );
+    // A MESMA árvore, acessada por uma grafia que difere só na caixa.
+    const trustedPorColisao = join(base, "candidate");
+    const result = spawnSync(
+      process.execPath,
+      [cli, "--candidate", root, "--trusted", trustedPorColisao],
+      { encoding: "utf8" }
+    );
+    assert.notEqual(result.status, 0, "gate se autoaprovou por colisão de caixa");
+    assert.match(result.stderr, RAIZES_SOBREPOSTAS, "a recusa não foi da classe própria de fronteira");
+    assert.doesNotMatch(result.stdout, /compatível com a política confiável/u, "linha de aprovação foi emitida");
+    assert.doesNotMatch(`${result.stdout}${result.stderr}`, /\n\s+at\s/u);
+  }
+);
+
+// --- Fatia C. Inércia da configuração candidata.
+//
+// Prova NEGATIVA: uma cópia candidata de `dependency-cruiser.json` e `policy.json`
+// enfraquecida é INERTE quando existe uma raiz confiável válida e disjunta. O gate lê
+// a confiável, ignora por completo qualquer `quality/` ou `tooling/toolchain/` sob a
+// candidata, e aprova. Se o afrouxamento candidato tivesse qualquer efeito, o gate
+// reprovaria — três regras de dependência a menos.
+test("cópia candidata enfraquecida é inerte quando a confiável válida existe", () => {
+  const fx = fixture();
+  // Semeia, sob a árvore CANDIDATA, um par afrouxado que só teria efeito se a candidata
+  // fosse tratada como fonte confiável.
+  mkdirSync(join(fx.candidate, "quality"), { recursive: true });
+  writeFileSync(join(fx.candidate, "quality", "policy.json"), JSON.stringify(POLITICA_ENFRAQUECIDA));
+  writeFileSync(
+    join(fx.candidate, "tooling", "toolchain", "dependency-cruiser.json"),
+    JSON.stringify(DEPENDENCIA_ENFRAQUECIDA)
+  );
+  const result = run(fx);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), APROVACAO);
+});
+
+// Prova SIMÉTRICA: com a raiz confiável AUSENTE de configuração, um candidato
+// perfeitamente válido reprova. A autoridade é unilateral — a confiável decide, e a
+// sua ausência não é aprovação.
+test("confiável ausente reprova mesmo com candidato válido", () => {
+  const root = mkdtempSync(join(tmpdir(), "confiavel-ausente-"));
+  const candidate = join(root, "candidate");
+  const trusted = join(root, "trusted");
+  mkdirSync(join(candidate, "tooling", "toolchain"), { recursive: true });
+  mkdirSync(trusted, { recursive: true });
+  writeFileSync(join(candidate, "vitest.config.ts"), VITEST);
+  writeFileSync(join(candidate, "eslint.config.mjs"), ESLINT);
+  const result = spawnSync(process.execPath, [cli, "--candidate", candidate, "--trusted", trusted], {
+    encoding: "utf8"
+  });
+  assert.notEqual(result.status, 0, "confiável sem política aprovou candidato válido");
+  assert.doesNotMatch(result.stdout, /compatível com a política confiável/u, "linha de aprovação foi emitida");
+});
