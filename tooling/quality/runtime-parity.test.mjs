@@ -315,6 +315,10 @@ test("a revisão Claude tem orçamento medido e falha fechada para erro técnico
   const enforcement = reviewSteps.find((step) => step.lines.some((line) => /name:\s*Enforce fail-closed verdict/.test(line)));
   assert.ok(enforcement, "veredito estruturado precisa de validação fail-closed");
   assert.ok(action.index < failureStep.index && failureStep.index < enforcement.index);
+  assert.ok(
+    enforcement.lines.every((_, index) => topLevelKey(enforcement, index, "if") === null),
+    "o validador precisa rodar após sucesso do Claude, inclusive com saída estruturada vazia"
+  );
   assert.match(enforcement.lines.join("\n"), /steps\.claude\.outputs\.structured_output/);
   assert.match(runBody(enforcement), /enforce-claude-review\.mjs/);
 });
