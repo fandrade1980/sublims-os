@@ -294,6 +294,35 @@ const CHECKOUT_SHA = "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"
 const SETUP_NODE_SHA = "actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38";
 const EXPECTED_JOBS = ["claude-review", "governance", "quality"];
 
+test("a revisão Claude tem orçamento medido e falha fechada para erro técnico", () => {
+  const reviewJob = jobBlocks(readWorkflow()).find((job) => job.name === "claude-review");
+  assert.ok(reviewJob, "job claude-review ausente");
+  const reviewSteps = steps(reviewJob.lines);
+  const action = reviewSteps.find((step) => step.lines.some((line, index) => topLevelKey(step, index, "id") === "claude"));
+  assert.ok(action, "passo Claude ausente");
+  assert.equal(withParameters(action).claude_args, ">-", "argumentos do Claude devem permanecer explícitos");
+  const actionText = action.lines.join("\n");
+  assert.match(actionText, /--max-turns 30(?:\s|$)/, "limite deve cobrir os 16 turnos medidos sem ficar ilimitado");
+  assert.match(actionText, /--allowedTools "Read,Grep,Glob"/, "a revisão deve permanecer somente leitura");
+  assert.match(actionText, /--json-schema /, "parecer estruturado obrigatório");
+  assert.doesNotMatch(actionText, /continue-on-error:\s*true/, "falha técnica não pode liberar merge");
+
+  const failureStep = reviewSteps.find((step) => step.lines.some((line) => /name:\s*Report inconclusive Claude review/.test(line)));
+  assert.ok(failureStep, "falha técnica precisa ser identificada como revisão inconclusiva");
+  assert.match(failureStep.lines.join("\n"), /failure\(\)\s*&&\s*steps\.claude\.outcome == 'failure'/);
+  assert.match(runBody(failureStep), /::error::.*inconclusiva/i);
+
+  const enforcement = reviewSteps.find((step) => step.lines.some((line) => /name:\s*Enforce fail-closed verdict/.test(line)));
+  assert.ok(enforcement, "veredito estruturado precisa de validação fail-closed");
+  assert.ok(action.index < failureStep.index && failureStep.index < enforcement.index);
+  assert.ok(
+    enforcement.lines.every((_, index) => topLevelKey(enforcement, index, "if") === null),
+    "o validador precisa rodar após sucesso do Claude, inclusive com saída estruturada vazia"
+  );
+  assert.match(enforcement.lines.join("\n"), /steps\.claude\.outputs\.structured_output/);
+  assert.match(runBody(enforcement), /enforce-claude-review\.mjs/);
+});
+
 function jobSetViolations(jobs) {
   const observed = jobs.map((job) => job.name).sort();
   if (observed.length === EXPECTED_JOBS.length && observed.every((name, index) => name === EXPECTED_JOBS[index])) {
