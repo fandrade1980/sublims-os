@@ -1,21 +1,121 @@
 {
-  "version": 1,
+  "version": 2,
+  "enabled": false,
+  "reason": "A aplicação ainda não foi materializada; a política será ativada depois que a fundação e os canários estiverem na base.",
+  "commands": [
+    {
+      "name": "typecheck",
+      "origin": "candidate",
+      "executable": "node",
+      "args": [
+        "${CANDIDATE_ROOT}/node_modules/typescript/bin/tsc",
+        "--noEmit",
+        "--project",
+        "${CANDIDATE_ROOT}/tsconfig.json"
+      ],
+      "toolPackages": [
+        "typescript"
+      ]
+    },
+    {
+      "name": "lint",
+      "origin": "candidate",
+      "executable": "node",
+      "args": [
+        "${CANDIDATE_ROOT}/node_modules/eslint/bin/eslint.js",
+        "--no-config-lookup",
+        "--config",
+        "${CANDIDATE_ROOT}/eslint.config.mjs",
+        "--max-warnings",
+        "0",
+        "src"
+      ],
+      "toolPackages": [
+        "eslint"
+      ]
+    },
+    {
+      "name": "test:coverage",
+      "origin": "candidate",
+      "executable": "node",
+      "args": [
+        "${CANDIDATE_ROOT}/node_modules/vitest/vitest.mjs",
+        "run",
+        "--coverage",
+        "--config",
+        "${CANDIDATE_ROOT}/vitest.config.ts"
+      ],
+      "toolPackages": [
+        "vitest",
+        "@vitest/coverage-v8"
+      ]
+    },
+    {
+      "name": "quality:complexity",
+      "origin": "base",
+      "executable": "node",
+      "args": [
+        "${BASE_TOOLCHAIN}/node_modules/eslint/bin/eslint.js",
+        "--no-config-lookup",
+        "--config",
+        "${BASE_TOOLCHAIN}/complexity.config.mjs",
+        "--max-warnings",
+        "0",
+        "--exit-on-fatal-error",
+        "src"
+      ],
+      "toolPackages": []
+    },
+    {
+      "name": "quality:dependencies",
+      "origin": "base",
+      "executable": "node",
+      "args": [
+        "${BASE_TOOLCHAIN}/node_modules/dependency-cruiser/bin/dependency-cruise.mjs",
+        "--config",
+        "${BASE_TOOLCHAIN}/dependency-cruiser.json",
+        "--ts-config",
+        "tsconfig.json",
+        "--output-type",
+        "err",
+        "--",
+        "src"
+      ],
+      "toolPackages": []
+    },
+    {
+      "name": "build",
+      "origin": "candidate",
+      "executable": "node",
+      "args": [
+        "${CANDIDATE_ROOT}/node_modules/next/dist/bin/next",
+        "build"
+      ],
+      "toolPackages": [
+        "next"
+      ]
+    }
+  ],
   "coverage": {
     "lines": 80,
     "branches": 75,
     "functions": 80,
-    "statements": 80
+    "statements": 80,
+    "include": [
+      "src/modules/**",
+      "src/shared/**"
+    ],
+    "exclude": []
   },
   "complexity": {
-    "maxCyclomaticPerFunction": 10,
-    "exceptionsRequire": ["justificativa na spec", "aprovação do reviewer"]
+    "maxCyclomaticPerFunction": 10
   },
   "dependencies": {
     "rules": [
-      "domain não importa UI",
-      "domain não importa banco, rede, relógio ou automação",
-      "módulos não acessam adapters de outro módulo diretamente",
-      "n8n e IA dependem de interfaces da aplicação"
+      "domain-not-to-ui",
+      "domain-not-to-infrastructure",
+      "module-not-to-foreign-adapters",
+      "integrations-only-to-module-seam"
     ]
   },
   "load": {
@@ -23,12 +123,47 @@
     "reason": "Aguardando endpoint, cenário, volume, latência-alvo e ambiente efêmero aprovados.",
     "productionTargetsAllowed": false
   },
-  "requiredApplicationScripts": [
-    "lint",
-    "typecheck",
-    "test:coverage",
-    "quality:complexity",
-    "quality:dependencies",
-    "build"
-  ]
+  "appliesWhenChanged": [
+    "src/**",
+    "tests/**",
+    "**/__tests__/**",
+    "**/*.test.*",
+    "**/*.spec.*",
+    "package.json",
+    "package-lock.json",
+    "npm-shrinkwrap.json",
+    ".npmrc",
+    "tsconfig*.json",
+    "next.config.*",
+    "eslint.config.*",
+    ".eslintrc*",
+    "vitest.config.*",
+    "vitest.workspace.*",
+    ".dependency-cruiser.*",
+    "postcss.config.*",
+    "tailwind.config.*",
+    "coverage.config.*",
+    "db/**",
+    "migrations/**",
+    "Dockerfile*",
+    ".dockerignore",
+    "docker-compose*.yml",
+    "docker-compose*.yaml",
+    "compose*.yml",
+    "compose*.yaml",
+    "scripts/**",
+    ".nvmrc"
+  ],
+  "allowedRebuilds": [],
+  "lockfile": {
+    "allowedRegistries": [
+      "https://registry.npmjs.org/"
+    ],
+    "acceptedIntegrityAlgorithms": [
+      "sha512"
+    ],
+    "acceptedLockfileVersions": [
+      3
+    ]
+  }
 }

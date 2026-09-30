@@ -1,0 +1,17 @@
+{
+  "name": "sublims-os-toolchain",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "npm@11.19.0",
+  "engines": {
+    "node": "24.21.0",
+    "npm": "11.19.0"
+  },
+  "devDependencies": {
+    "@typescript-eslint/parser": "8.70.0",
+    "dependency-cruiser": "18.2.0",
+    "eslint": "10.10.0",
+    "typescript": "6.0.3"
+  }
+}
