@@ -4630,3 +4630,127 @@ test("confiável ausente reprova mesmo com candidato válido", () => {
   assert.notEqual(result.status, 0, "confiável sem política aprovou candidato válido");
   assert.doesNotMatch(result.stdout, /compatível com a política confiável/u, "linha de aprovação foi emitida");
 });
+
+// --- Terminadores de linha em comentário de linha.
+//
+// Em JavaScript um comentário `//` termina em LF, CR, U+2028 ou U+2029. Um
+// validador que só reconhecesse LF tratava como comentário (e apagava) texto que
+// o motor carrega como propriedade ATIVA: `// x<CR>setupFiles: [...]`. Os vetores
+// abaixo rodam contra a CLI real; o valor esperado é a recusa fail-closed, sem eco
+// do conteúdo candidato. O controle posterior prova que o mesmo separador dentro
+// de literal continua sendo DADO. Os separadores são montados por código para que
+// o próprio arquivo de teste não contenha o caractere.
+const TERMINADORES_DE_LINHA = [
+  ["CR", String.fromCharCode(0x0d)],
+  ["U+2028", String.fromCharCode(0x2028)],
+  ["U+2029", String.fromCharCode(0x2029)]
+];
+const RECUSA_GENERICA = /^Configuração candidata reprovada: /u;
+const RASTROS_DO_CANDIDATO = /setupFiles|marker\.ts|benign|pwn|globalThis/u;
+
+// Cada vetor declara a CLASSE de recusa que o validador produz para ele. O prefixo
+// genérico sozinho aceitaria uma recusa por motivo alheio (arquivo ilegível, fixture
+// malformada); a classe prova que o conteúdo escondido após o separador foi lido
+// como estrutura e reprovado pela gramática certa. Classes atribuídas pelo caminho de
+// `assertCoverage` e `assertLint`:
+//   - propriedade desconhecida em `coverage` ou `test`: gramática fechada de cobertura;
+//   - instrução antes de `export default` no vitest: preâmbulo da cobertura;
+//   - instrução antes ou depois da importação canônica no lint: preâmbulo do lint;
+//   - `ignores` que alcança src: ignorar src proibido;
+//   - chave `complexity` repetida em `rules`: forma não canônica do lint.
+function assertRecusaSemEco(result, descricao, classe) {
+  assert.notEqual(result.status, 0, `${descricao}: comentário terminado por separador foi aprovado`);
+  assert.match(result.stderr, RECUSA_GENERICA, descricao);
+  assert.match(result.stderr, classe, `${descricao}: recusa de classe inesperada`);
+  assert.doesNotMatch(result.stdout, /compatível com a política confiável/u, descricao);
+  assert.doesNotMatch(`${result.stdout}${result.stderr}`, RASTROS_DO_CANDIDATO, `${descricao}: eco de conteúdo candidato`);
+  assert.doesNotMatch(`${result.stdout}${result.stderr}`, /\n\s+at\s/u, descricao);
+}
+
+for (const [nome, separador] of TERMINADORES_DE_LINHA) {
+  const vetoresVitest = [
+    [
+      "propriedade ativa escondida após comentário no bloco coverage",
+      VITEST.replace("exclude: [],", `exclude: [], // benign${separador}setupFiles: ["./marker.ts"],\n`),
+      COBERTURA_NAO_CANONICA
+    ],
+    [
+      "propriedade de test escondida após comentário",
+      VITEST.replace("test: {", `test: { // benign${separador}setupFiles: ["./marker.ts"],\n`),
+      COBERTURA_NAO_CANONICA
+    ],
+    [
+      "instrução executável no preâmbulo escondida após comentário",
+      `// benign${separador}globalThis.pwn = 1;\n${VITEST}`,
+      PREAMBULO_EXECUTAVEL
+    ]
+  ];
+  for (const [descricao, vitest, classe] of vetoresVitest) {
+    test(`vitest.config.ts recusa ${descricao} (${nome})`, () => {
+      assertRecusaSemEco(run(fixture({ vitest })), `${descricao} ${nome}`, classe);
+    });
+  }
+
+  const vetoresEslint = [
+    [
+      "instrução executável no preâmbulo escondida após comentário",
+      `// benign${separador}globalThis.pwn = 1;\n${ESLINT}`,
+      PREAMBULO_LINT_INVALIDO
+    ],
+    [
+      "instrução executável entre importação e export escondida após comentário",
+      ESLINT.replace("export default", `// benign${separador}globalThis.pwn = 1;\nexport default`),
+      PREAMBULO_LINT_INVALIDO
+    ],
+    [
+      "ignores de src escondido após comentário no bloco",
+      ESLINT.replace('files: ["src/**/*.ts"],', `files: ["src/**/*.ts"], // benign${separador}ignores: ["src/**"],`),
+      ALCANCA_SRC
+    ],
+    [
+      // O fechamento de `rules` fica APÓS um LF: com a semântica só-LF o trecho
+      // `complexity: "off"` é apagado junto com o comentário e a fixture aprova;
+      // com a semântica correta o código real tem `complexity` duplicado cujo
+      // último valor é "off".
+      "regra de complexidade anulada escondida após comentário em rules",
+      ESLINT.replace(
+        'variant: "classic" }] }',
+        `variant: "classic" }], // benign${separador}complexity: "off"\n  }`
+      ),
+      NAO_CANONICO_LINT
+    ]
+  ];
+  for (const [descricao, eslint, classe] of vetoresEslint) {
+    test(`eslint.config.mjs recusa ${descricao} (${nome})`, () => {
+      assertRecusaSemEco(run(fixture({ eslint })), `${descricao} ${nome}`, classe);
+    });
+  }
+
+  // Controle: o separador dentro de literal textual é dado, não estrutura. O texto
+  // `// ...` dentro da string não abre comentário, e o separador não o fecha.
+  // CR cru dentro de string JavaScript não é literal válido (só U+2028 e U+2029
+  // são admitidos crus desde ES2019); para CR o controle usa a sequência de
+  // escape de duas posições (barra invertida e "r"), que é dado válido.
+  test(`separador ${nome} dentro de literal não é confundido com fim de comentário`, () => {
+    const emLiteral = nome === "CR" ? "\\r" : separador;
+    const eslint = ESLINT.replace(
+      'variant: "classic" }] }',
+      `variant: "classic" }], nota: "// a${emLiteral}b" }`
+    );
+    const result = run(fixture({ eslint }));
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), APROVACAO);
+  });
+}
+
+// Controles positivos: comentário de linha terminado por LF ou CRLF, sem payload
+// escondido, continua aprovado.
+for (const [nome, quebra] of [["LF", "\n"], ["CRLF", "\r\n"]]) {
+  test(`comentário de linha válido terminado por ${nome} continua aprovado`, () => {
+    const vitest = VITEST.replace("exclude: [],", `exclude: [], // nota${quebra}`);
+    const eslint = `// nota${quebra}${ESLINT}`;
+    const result = run(fixture({ vitest, eslint }));
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), APROVACAO);
+  });
+}

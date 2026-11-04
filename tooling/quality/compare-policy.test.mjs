@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 
@@ -2869,3 +2869,168 @@ for (const [nome, changeClass, target] of [
     assertReprovaInterface(result, /`changeClass` desconhecida/iu);
   });
 }
+
+// ---------------------------------------------------------------------------------
+// Fronteira de confiança entre as raízes.
+//
+// O comparador lê `quality/policy.json` e `quality/policy-exceptions.json` da raiz
+// `--trusted`. Se `--trusted` e `--candidate` designam o mesmo diretório, ou se uma
+// contém a outra, a árvore candidata pode SER a fonte confiável: política e registro
+// de exceções são lidos do próprio candidato e o gate se autoaprova. A recusa tem
+// classe própria — fronteira violada, não valor incompatível — e é feita por segmentos
+// de caminho, nunca por prefixo textual: raiz irmã cujo nome apenas começa com o nome
+// da outra é legítima. A mesma classe e a mesma mensagem do validador de configuração
+// candidata (`validate-candidate-config.mjs`), com o prefixo próprio deste comparador.
+// ---------------------------------------------------------------------------------
+
+const RAIZES_SOBREPOSTAS =
+  /Política reprovada: raízes confiável e candidata não podem coincidir nem se sobrepor/u;
+const APROVACAO = /^Política candidata compatível com a política confiável\.\n$/u;
+
+// Política deliberadamente afrouxada (cobertura zerada), escrita como política de AMBOS
+// os lados do par sobreposto: é exatamente o que um candidato que fosse também a fonte
+// confiável apresentaria. Sem a fronteira, os dois lados são iguais e o gate aprova.
+function afrouxada(policy) {
+  policy.coverage.lines = 0;
+  policy.coverage.branches = 0;
+  policy.coverage.functions = 0;
+  policy.coverage.statements = 0;
+  return policy;
+}
+
+// Prepara um diretório arbitrário como raiz com política afrouxada e registro vazio,
+// sem criar caminho novo de código: o diretório pode já existir (raiz externa) ou ser
+// aninhado em outra raiz.
+function prepararRaizAfrouxada(root) {
+  mkdirSync(join(root, "quality"), { recursive: true });
+  escreverPolitica(root, afrouxada);
+  escrever(root, "quality/policy-exceptions.json", registroCom([]));
+}
+
+function assertRaizesRecusadas(result) {
+  assertReprovaInterface(result, RAIZES_SOBREPOSTAS);
+  assert.doesNotMatch(result.stdout, /compatível com a política confiável/u, "linha de aprovação emitida");
+  assert.equal(result.stdout, "", "saída padrão não vazia em reprovação");
+}
+
+test("raízes idênticas são recusadas pela fronteira, não aprovadas", () => {
+  const root = novaRaiz("mesma-raiz");
+  prepararRaizAfrouxada(root);
+  assertRaizesRecusadas(executar(root, root));
+});
+
+test("raízes equivalentes por segmento relativo são recusadas pela fronteira", () => {
+  const root = novaRaiz("raiz-equivalente");
+  prepararRaizAfrouxada(root);
+  // `<raiz>/quality/..` resolve para `<raiz>`: grafia diferente, diretório idêntico.
+  assertRaizesRecusadas(executar(root, `${root}/quality/..`));
+});
+
+test("raiz confiável contida na candidata é recusada pela fronteira", () => {
+  const candidate = novaRaiz("candidata-externa");
+  const trusted = join(candidate, "confiavel-interna");
+  prepararRaizAfrouxada(candidate);
+  prepararRaizAfrouxada(trusted);
+  assertRaizesRecusadas(executar(trusted, candidate));
+});
+
+test("raiz candidata contida na confiável é recusada pela fronteira", () => {
+  const trusted = novaRaiz("confiavel-externa");
+  const candidate = join(trusted, "candidata-interna");
+  prepararRaizAfrouxada(trusted);
+  prepararRaizAfrouxada(candidate);
+  assertRaizesRecusadas(executar(trusted, candidate));
+});
+
+// A recusa não ecoa caminho algum: o marcador está no NOME do diretório, e o caminho
+// completo é dado do runner. Nenhuma das duas formas pode aparecer na saída.
+for (const [nome, montar] of [
+  ["idênticas", (root) => [root, root]],
+  ["confiável contida na candidata", (root) => [join(root, "interna"), root]],
+  ["candidata contida na confiável", (root) => [root, join(root, "interna")]]
+]) {
+  test(`recusa de raízes ${nome} não ecoa caminhos`, () => {
+    const root = novaRaiz(MARCADOR);
+    prepararRaizAfrouxada(root);
+    const [trusted, candidate] = montar(root);
+    prepararRaizAfrouxada(trusted);
+    prepararRaizAfrouxada(candidate);
+    const result = executar(trusted, candidate);
+    assertRaizesRecusadas(result);
+    const saida = saidaCompleta(result);
+    assert.equal(saida.includes(root), false, "caminho da raiz ecoado na saída");
+    assert.equal(saida.includes(basename(root)), false, "nome da raiz ecoado na saída");
+    assert.equal(saida.includes(dirname(root)), false, "diretório pai da raiz ecoado na saída");
+  });
+}
+
+// Controles positivos. Cada um usa raízes DISJUNTAS por segmento, com a configuração
+// válida do contrato (registro vazio na confiável, política idêntica nos dois lados),
+// e prova que a fronteira não recusa o que é legítimo. Sem eles, uma implementação que
+// recusasse todo par de raízes passaria nos testes de recusa.
+test("raízes disjuntas continuam aprovadas", () => {
+  const trusted = novaRaiz("controle-disjuntas-confiavel");
+  const candidate = novaRaiz("controle-disjuntas-candidata");
+  escrever(trusted, "quality/policy-exceptions.json", registroCom([]));
+  const result = executar(trusted, candidate);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, APROVACAO);
+});
+
+test("candidata irmã cujo nome começa com o da confiável continua aprovada", () => {
+  const trusted = novaRaiz("controle-prefixo-a");
+  escrever(trusted, "quality/policy-exceptions.json", registroCom([]));
+  // `<confiável>-2` tem `<confiável>` como prefixo TEXTUAL, mas é outro diretório.
+  const candidate = `${trusted}-2`;
+  mkdirSync(join(candidate, "quality"), { recursive: true });
+  escreverPolitica(candidate);
+  const result = executar(trusted, candidate);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, APROVACAO);
+});
+
+test("confiável irmã cujo nome começa com o da candidata continua aprovada", () => {
+  const candidate = novaRaiz("controle-prefixo-b");
+  const trusted = `${candidate}-2`;
+  mkdirSync(join(trusted, "quality"), { recursive: true });
+  mkdirSync(join(trusted, "specs"), { recursive: true });
+  escreverPolitica(trusted);
+  escrever(trusted, "quality/policy-exceptions.json", registroCom([]));
+  const result = executar(trusted, candidate);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, APROVACAO);
+});
+
+// Colisão de caixa. Em win32 (NTFS, insensível a caixa) `Raiz` e `raiz` são o MESMO
+// diretório: segmentos comparados por texto exato pareceriam disjuntos e o candidato
+// seria a própria fonte confiável. Em filesystem sensível a caixa são diretórios
+// distintos e legítimos. Cada teste roda só na plataforma em que o comportamento existe.
+const NO_WINDOWS = process.platform === "win32";
+
+test(
+  "grafias que diferem só na caixa são a mesma raiz e são recusadas",
+  { skip: NO_WINDOWS ? false : "colisão de caixa só ocorre em filesystem insensível a caixa (win32)" },
+  () => {
+    const root = novaRaiz("colisao-de-caixa");
+    prepararRaizAfrouxada(root);
+    const outraGrafia = join(dirname(root), basename(root).toUpperCase());
+    assert.notEqual(outraGrafia, root, "a fixture precisa diferir só na caixa");
+    assertRaizesRecusadas(executar(root, outraGrafia));
+  }
+);
+
+test(
+  "grafias que diferem só na caixa em filesystem sensível a caixa são raízes distintas e aprovadas",
+  { skip: NO_WINDOWS ? "filesystem insensível a caixa: as duas grafias são o mesmo diretório" : false },
+  () => {
+    const trusted = novaRaiz("Controle-Caixa");
+    const candidate = join(dirname(trusted), basename(trusted).toLowerCase());
+    assert.notEqual(candidate, trusted, "a fixture precisa diferir só na caixa");
+    escrever(trusted, "quality/policy-exceptions.json", registroCom([]));
+    mkdirSync(join(candidate, "quality"), { recursive: true });
+    escreverPolitica(candidate);
+    const result = executar(trusted, candidate);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, APROVACAO);
+  }
+);

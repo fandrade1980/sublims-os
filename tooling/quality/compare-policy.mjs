@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, join, resolve, sep } from "node:path";
 import { assertSpecIdentity, parseSpecMeta } from "../lib/spec-meta.mjs";
 import { buildBaseSnapshot, readEntryText, SPEC_PATTERN } from "../lib/snapshot.mjs";
 
@@ -298,6 +298,40 @@ function parseArguments(argv) {
     }
   }
   return options;
+}
+
+// Fronteira de confiança entre as raízes. A política e o registro de exceções são lidos
+// SOB `--trusted`; se `--candidate` é o mesmo diretório, ou contém ou está contido na
+// raiz confiável, a árvore candidata pode ser a própria fonte confiável e o gate se
+// autoaprova. A semântica é a de `assertRaizesDisjuntas` em `validate-candidate-config.mjs`,
+// reescrita aqui de propósito: importar aquele CLI o executaria, e o plano não autoriza
+// caminho novo para um módulo compartilhado.
+//
+// A comparação é por SEGMENTO de caminho, nunca por prefixo textual: `<raiz>-2` tem
+// `<raiz>` como prefixo de texto e é outro diretório, legítimo. Em filesystem
+// insensível a caixa (win32) os segmentos são dobrados; nos demais as duas grafias são
+// diretórios distintos. Symlink e realpath ficam fora de escopo: as raízes chegam
+// apenas por `resolve`.
+const FILESYSTEM_INSENSIVEL_A_CAIXA = process.platform === "win32";
+
+function segmentosDaRaiz(raiz) {
+  return raiz
+    .split(sep)
+    .filter((segmento) => segmento !== "")
+    .map((segmento) => (FILESYSTEM_INSENSIVEL_A_CAIXA ? segmento.toLowerCase() : segmento));
+}
+
+// A mensagem declara a classe do defeito e não cita caminho algum: caminho é dado do
+// runner e não pertence à saída de um gate.
+function assertRaizesDisjuntas(trusted, candidate) {
+  const daConfiavel = segmentosDaRaiz(trusted);
+  const daCandidata = segmentosDaRaiz(candidate);
+  const curta = daConfiavel.length <= daCandidata.length ? daConfiavel : daCandidata;
+  const longa = curta === daConfiavel ? daCandidata : daConfiavel;
+  // Raízes idênticas caem aqui também: cada uma é prefixo da outra.
+  if (curta.every((segmento, indice) => segmento === longa[indice])) {
+    throw new Error("raízes confiável e candidata não podem coincidir nem se sobrepor");
+  }
 }
 
 // Consulta unilateral: o registro é lido sob a raiz confiável e em nenhum outro
@@ -936,9 +970,14 @@ function compararAllowedRebuilds(trustedPolicy, candidatePolicy, registro) {
 
 try {
   const options = parseArguments(process.argv.slice(2));
-  const registro = carregarRegistroConfiavel(options.get("--trusted"));
-  const trustedPolicy = carregarPolitica(options.get("--trusted"), "confiável");
-  const candidatePolicy = carregarPolitica(options.get("--candidate"), "candidata");
+  // Antes de QUALQUER leitura: nenhum arquivo é aberto enquanto a fronteira não for
+  // provada. Daqui em diante só as raízes resolvidas são usadas.
+  const trusted = resolve(options.get("--trusted"));
+  const candidate = resolve(options.get("--candidate"));
+  assertRaizesDisjuntas(trusted, candidate);
+  const registro = carregarRegistroConfiavel(trusted);
+  const trustedPolicy = carregarPolitica(trusted, "confiável");
+  const candidatePolicy = carregarPolitica(candidate, "candidata");
   assertQuantidadeDeComandos(trustedPolicy, candidatePolicy);
   // Antes das comparações com classe de exceção: a forma e os campos inegociáveis
   // delimitam o que as demais comparações leem. Um `coverage.include` encolhido

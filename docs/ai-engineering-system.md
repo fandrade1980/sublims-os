@@ -108,6 +108,10 @@ Disso decorre, sem regra adicional, que **uma exceção criada no mesmo PR que t
 
 As mensagens de reprovação declaram a classe do problema e a posição da entrada. Nunca ecoam valor, padrão, nome de pacote, caminho de spec, issue ou data.
 
+Antes de ler o registro ou qualquer política, `compare-policy.mjs` resolve `--trusted` e `--candidate` e recusa raízes coincidentes ou sobrepostas, isto é, uma igual à outra ou uma contida na outra. Sem essa fronteira, a árvore candidata poderia ser a própria fonte confiável de política e de registro, e o gate se autoaprovaria. A comparação é por segmentos de caminho, não por prefixo textual, de modo que raízes irmãs cujo nome apenas começa com o da outra continuam válidas. A dobra de caixa só ocorre em `win32`, e a mensagem de recusa não ecoa caminho algum.
+
+O limite dessa equivalência de caminhos é sintático, após `resolve`. Não são cobertos: links simbólicos e `realpath`; aliases de caminho do Windows, como nomes curtos 8.3, ponto ou espaço final e fluxos alternativos de dados (ADS); e volumes insensíveis a caixa fora do `win32`. Por isso o caminho de `--trusted` informado pelo workflow precisa vir de fonte confiável, nunca de valor controlado pelo candidato. Esta verificação é um controle do comparador; não afirma que o CI já aplica a política v2 nem que os gates do PR 7 estão provados.
+
 Hoje o registro nasce vazio: `{"version":1,"exceptions":[]}`. Nenhum afrouxamento está autorizado.
 
 ## Configuração do candidato

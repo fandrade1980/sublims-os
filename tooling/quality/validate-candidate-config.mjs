@@ -1700,11 +1700,17 @@ function literalEnd(source, start) {
 // e, com elas, os deslocamentos usados nas mensagens. Um "/" que não abre comentário
 // seria divisão ou literal de expressão regular; ambos estão fora da gramática
 // canônica e reprovam, em vez de serem adivinhados por contexto.
+// Terminadores de linha do ECMAScript: LF, CR, U+2028 e U+2029. Um comentário `//`
+// termina em QUALQUER um deles; reconhecer só LF apagaria como comentário texto que
+// o motor carrega como código (`// x<CR>setupFiles: [...]`). Os códigos são
+// numéricos para que este arquivo não contenha os separadores invisíveis.
+const TERMINADORES_DE_LINHA = new Set([0x0a, 0x0d, 0x2028, 0x2029]);
+
 function blankComment(source, start) {
   const next = source[start + 1];
   if (next === "/") {
     let end = start;
-    while (end < source.length && source[end] !== "\n") end += 1;
+    while (end < source.length && !TERMINADORES_DE_LINHA.has(source.charCodeAt(end))) end += 1;
     return { blanks: " ".repeat(end - start), end };
   }
   if (next !== "*") throw new Error(TOKEN_NAO_CANONICO);
