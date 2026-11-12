@@ -303,8 +303,11 @@ test("a revisão Claude tem orçamento medido e falha fechada para erro técnico
   assert.equal(withParameters(action).claude_args, ">-", "argumentos do Claude devem permanecer explícitos");
   const actionText = action.lines.join("\n");
   assert.match(actionText, /--max-turns 30(?:\s|$)/, "limite deve cobrir os 16 turnos medidos sem ficar ilimitado");
-  assert.match(actionText, /--allowedTools "Read,Grep,Glob"/, "a revisão deve permanecer somente leitura");
+  assert.match(actionText, /--tools "Read,Grep,Glob"/, "só ferramentas internas de leitura devem estar disponíveis");
+  assert.match(actionText, /--allowedTools "Read,Grep,Glob"/, "ferramentas de leitura não devem exigir aprovação interativa");
+  assert.match(actionText, /--disallowedTools "mcp__\*"/, "ferramentas MCP não devem contornar a restrição de leitura");
   assert.match(actionText, /--json-schema /, "parecer estruturado obrigatório");
+  assert.doesNotMatch(actionText, /"(?:minLength|minimum)"/, "limites de valor pertencem ao validador confiável");
   assert.doesNotMatch(actionText, /continue-on-error:\s*true/, "falha técnica não pode liberar merge");
 
   const failureStep = reviewSteps.find((step) => step.lines.some((line) => /name:\s*Report inconclusive Claude review/.test(line)));
