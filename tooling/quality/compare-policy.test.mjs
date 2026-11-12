@@ -3034,3 +3034,33 @@ test(
     assert.match(result.stdout, APROVACAO);
   }
 );
+
+// Caracterização de ORDEM: a fronteira é verificada ANTES de qualquer leitura.
+//
+// As raízes abaixo não têm `quality/policy.json` nem `quality/policy-exceptions.json`
+// (nem o diretório `quality`). Se a verificação das raízes ocorresse depois da carga do
+// registro ou das políticas, a CLI reprovaria por "registro de exceções ausente ou
+// ilegível" e a classe da fronteira nunca apareceria. Os testes de recusa anteriores
+// criam política e registro válidos nos dois lados, então uma mutação que movesse
+// `assertRaizesDisjuntas` para depois das leituras continuaria os reprovando pela
+// fronteira e passaria despercebida; este teste é o que a detecta.
+//
+// Nasce verde na implementação correta, por desenho: a ordem já está certa, e o teste
+// só a fixa. Ele falharia sob a mutação (classe de leitura no lugar da de fronteira).
+test("fronteira de raízes é verificada antes de qualquer leitura de registro ou política", () => {
+  const root = mkdtempSync(join(tmpdir(), `sublims-compare-${MARCADOR}-`));
+  for (const [nome, trusted, candidate] of [
+    ["idênticas", root, root],
+    ["confiável contida na candidata", join(root, "interna"), root],
+    ["candidata contida na confiável", root, join(root, "interna")]
+  ]) {
+    const result = executar(trusted, candidate);
+    assertReprovaInterface(result, RAIZES_SOBREPOSTAS);
+    assert.doesNotMatch(result.stderr, /ausente ou ilegível/u, `${nome}: erro de leitura antes da fronteira`);
+    assert.equal(result.stdout, "", `${nome}: saída padrão não vazia em reprovação`);
+    const saida = saidaCompleta(result);
+    assert.equal(saida.includes(root), false, `${nome}: caminho da raiz ecoado na saída`);
+    assert.equal(saida.includes(basename(root)), false, `${nome}: nome da raiz ecoado na saída`);
+    assert.equal(saida.includes(dirname(root)), false, `${nome}: diretório pai ecoado na saída`);
+  }
+});
