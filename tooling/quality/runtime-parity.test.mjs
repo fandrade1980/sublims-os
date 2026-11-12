@@ -308,6 +308,10 @@ test("a revisão Claude tem orçamento medido e falha fechada para erro técnico
   assert.match(actionText, /--disallowedTools "mcp__\*"/, "ferramentas MCP não devem contornar a restrição de leitura");
   assert.match(actionText, /--json-schema /, "parecer estruturado obrigatório");
   assert.doesNotMatch(actionText, /"(?:minLength|minimum)"/, "limites de valor pertencem ao validador confiável");
+  const schemaArgument = actionText.match(/--json-schema '([^\r\n]+)'/)?.[1];
+  assert.ok(schemaArgument, "schema da revisão ausente");
+  const reviewSchema = JSON.parse(schemaArgument);
+  assert.deepEqual(reviewSchema.properties.findings, { type: "array" }, "itens devem ser validados pela base confiável");
   assert.doesNotMatch(actionText, /continue-on-error:\s*true/, "falha técnica não pode liberar merge");
 
   const failureStep = reviewSteps.find((step) => step.lines.some((line) => /name:\s*Report inconclusive Claude review/.test(line)));
