@@ -217,11 +217,13 @@ Arquivos binários não são enviados à revisão. Sua presença bloqueia o flux
 
 Em `pull_request_target`, `GITHUB_SHA` aponta para a base. Um check publicado nesse commit não é o check que a proteção da branch avalia, e presumir o contrário produziria um veredito sem efeito de bloqueio.
 
-Depois de validar a saída estruturada, um **job publisher separado** publica o resultado. Esse job não recebe o segredo da Anthropic e declara somente `checks: write` além da leitura necessária.
+Depois de extrair e validar o veredito JSON, um **job publisher separado** publica o resultado. Esse job não recebe o segredo da Anthropic e declara somente `checks: write` além da leitura necessária.
+
+**Fonte do veredito.** A resposta final da revisão é um único objeto JSON, sem prosa ou Markdown, conforme o contrato fixado pela base confiável. A presença de `structured_output` não é requisito para concluir a revisão. O job de revisão exige `conclusion: "success"` da ação, lê o `execution_file` que ela fornece e aceita exclusivamente o campo textual `result` de um único evento final `type: "result"`, com `subtype: "success"` e `is_error: false`. Esse texto precisa ser JSON completo, cujo objeto e contagem de achados são validados pelo código da base confiável antes de chegar ao publisher. O arquivo de execução e a resposta do modelo são dados não confiáveis: mensagens intermediárias não servem de fallback, não há extração parcial nem reparo de texto, e o conteúdo bruto não é publicado em logs ou checks. Artefato ausente ou ilegível, evento final ausente, repetido ou incompatível, JSON inválido e veredito fora do contrato tornam a revisão inconclusiva e mantêm o bloqueio.
 
 Antes de publicar, o publisher obtém novamente pela API o SHA que a proteção da branch estará avaliando e o compara com o estado do PR registrado no início da revisão. O SHA não é presumido a partir de `GITHUB_SHA`.
 
-O check publicado falha quando: a saída estruturada estiver ausente ou malformada; a contagem de achados críticos divergir da quantidade de achados críticos presentes; houver qualquer achado crítico; o SHA do PR tiver mudado desde o início da revisão; ou não for possível identificar com segurança o SHA avaliado.
+O check publicado falha quando: o veredito JSON validado estiver ausente ou malformado; a contagem de achados críticos divergir da quantidade de achados críticos presentes; houver qualquer achado crítico; o SHA do PR tiver mudado desde o início da revisão; ou não for possível identificar com segurança o SHA avaliado.
 
 A proteção da branch exige o **nome exato** desse check e sua **origem esperada**, de modo que um check homônimo produzido por outra origem não satisfaça a exigência.
 
@@ -229,9 +231,9 @@ A proteção da branch exige o **nome exato** desse check e sua **origem esperad
 
 Um veredito de revisão só é informação útil quando o revisor teve orçamento para produzi-lo e quando o resultado distingue defeito de indisponibilidade.
 
-**Orçamento dimensionado.** O limite de turnos e o timeout do job de revisão são dimensionados e testados para o **maior diff que a política permite**, conforme os limites declarados no item 19. Orçamento não é escolhido por tentativa: existe teste que exercita o limite máximo aceito de tamanho de diff e comprova que a revisão produz saída estruturada válida dentro do orçamento.
+**Orçamento dimensionado.** O limite de turnos e o timeout do job de revisão são dimensionados e testados para o **maior diff que a política permite**, conforme os limites declarados no item 19. Orçamento não é escolhido por tentativa: existe teste que exercita o limite máximo aceito de tamanho de diff e comprova que a revisão produz um veredito JSON válido dentro do orçamento.
 
-**Classificação de falhas.** São falhas técnicas ou inconclusivas, não achados: esgotamento do limite de turnos; timeout do job; erro da API; saída estruturada ausente ou inválida; e esgotamento causado por tentativas de uso de ferramentas negadas.
+**Classificação de falhas.** São falhas técnicas ou inconclusivas, não achados: esgotamento do limite de turnos; timeout do job; erro da API; veredito JSON ausente ou inválido; e esgotamento causado por tentativas de uso de ferramentas negadas.
 
 Todas continuam **bloqueando o merge de forma fail-closed** — ausência de veredito nunca é aprovação. Nenhuma delas, porém, pode ser apresentada como "falha crítica encontrada", porque nada foi encontrado: a revisão não concluiu.
 
@@ -328,9 +330,10 @@ Não há reuso de `node_modules`, de configuração nem de artefatos mutados ent
 - Validador de configuração candidata e prova de canário por gate, em ambiente descartável.
 - Parser da lista de alterações: entrada NUL-safe como `Buffer`, status aceitos, entradas inválidas rejeitadas.
 - Materializador do diff de revisão: paginação, conferência com `changed_files`, patch ausente ou truncado, limites e binários.
+- Extração do veredito: somente o resultado final bem-sucedido do `execution_file`, JSON completo validado pela base confiável, sem fallback para mensagens intermediárias nem eco do conteúdo bruto; ausência, repetição e formato inválido reprovados.
 - Publisher do check: resolução do SHA por consulta, comparação com o estado inicial, e as cinco condições de falha.
 - Classificador de resultado da revisão: os três estados observáveis, e o mapeamento de cada causa técnica para o estado inconclusivo.
-- Orçamento de revisão: execução no limite máximo de tamanho de diff permitido pela política, comprovando saída estruturada dentro do limite de turnos e do timeout.
+- Orçamento de revisão: execução no limite máximo de tamanho de diff permitido pela política, comprovando veredito JSON válido dentro do limite de turnos e do timeout.
 - Coerência entre lista de ferramentas permitidas e prompt do revisor, medida pela contagem de tentativas negadas.
 - Política de repetição: classificação de transitoriedade, limite de tentativas e impossibilidade de aprovar sem veredito.
 - `.github/workflows/**` como dado verificável, por lint estático.
@@ -472,7 +475,7 @@ Não há reuso de `node_modules`, de configuração nem de artefatos mutados ent
 
 90. Um job publisher separado publica o resultado, sem o segredo da Anthropic.
 91. O SHA avaliado é obtido novamente pela API e comparado com o estado do PR registrado no início da revisão; não é presumido a partir de `GITHUB_SHA`.
-92. O check falha quando a saída estruturada está ausente ou malformada.
+92. O check falha quando o veredito JSON validado está ausente ou malformado.
 93. O check falha quando a contagem de críticos diverge dos achados presentes.
 94. O check falha quando existe qualquer achado crítico.
 95. O check falha quando o SHA do PR mudou desde o início da revisão.
@@ -482,11 +485,11 @@ Não há reuso de `node_modules`, de configuração nem de artefatos mutados ent
 **Orçamento e conclusividade da revisão**
 
 98. O limite de turnos e o timeout do job de revisão estão dimensionados para o maior diff permitido pelos limites declarados no item 19 do Escopo.
-99. Existe teste que exercita o limite máximo aceito de tamanho de diff e comprova que a revisão produz saída estruturada válida dentro do orçamento.
+99. Existe teste que exercita o limite máximo aceito de tamanho de diff e comprova que a revisão produz um veredito JSON válido dentro do orçamento.
 100. Esgotamento do limite de turnos é classificado como falha técnica ou inconclusiva, nunca como achado.
 101. Timeout do job é classificado como falha técnica ou inconclusiva.
 102. Erro da API é classificado como falha técnica ou inconclusiva.
-103. Saída estruturada ausente ou inválida é classificada como falha técnica ou inconclusiva.
+103. Veredito JSON ausente ou inválido é classificado como falha técnica ou inconclusiva.
 104. Esgotamento causado por tentativas de uso de ferramentas negadas é classificado como falha técnica ou inconclusiva.
 105. Toda falha das cinco classes acima bloqueia o merge de forma fail-closed.
 106. Nenhuma falha dessas classes é apresentada com a linguagem de achado crítico.
@@ -558,7 +561,7 @@ Não há reuso de `node_modules`, de configuração nem de artefatos mutados ent
 - Demonstração da isenção automatizada: PR npm restrito a manifesto e lockfile aceito sem `Issue` e `Spec`; o mesmo PR com arquivo adicional reprovado; PR de `github-actions` não isento.
 - Demonstração da materialização do diff: paginação completa, divergência com `changed_files` reprovada, patch truncado reprovado e binário encaminhado ao fluxo manual.
 - Demonstração da publicação do veredito: check publicado no SHA obtido por consulta, e as cinco condições de falha exercitadas.
-- Saída da revisão executada no limite máximo de tamanho de diff permitido, com `structured_output` válido dentro do limite de turnos e do timeout.
+- Saída da revisão executada no limite máximo de tamanho de diff permitido, com resultado final do `execution_file` convertido em veredito JSON válido dentro do limite de turnos e do timeout.
 - Demonstração dos três estados do relatório: revisão aprovada, achado crítico e revisão inconclusiva com causa nomeada.
 - Registro de `permission_denials_count` igual a zero no canário de ponta a ponta, comprovando coerência entre prompt e ferramentas permitidas.
 - Quando houver repetição automática: registro do limite de tentativas, da classificação de transitoriedade, e de que o esgotamento manteve o bloqueio.
