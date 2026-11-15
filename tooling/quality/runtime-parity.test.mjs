@@ -306,12 +306,8 @@ test("a revisão Claude tem orçamento medido e falha fechada para erro técnico
   assert.match(actionText, /--tools "Read,Grep,Glob"/, "só ferramentas internas de leitura devem estar disponíveis");
   assert.match(actionText, /--allowedTools "Read,Grep,Glob"/, "ferramentas de leitura não devem exigir aprovação interativa");
   assert.match(actionText, /--disallowedTools "mcp__\*"/, "ferramentas MCP não devem contornar a restrição de leitura");
-  assert.match(actionText, /--json-schema /, "parecer estruturado obrigatório");
-  assert.doesNotMatch(actionText, /"(?:minLength|minimum)"/, "limites de valor pertencem ao validador confiável");
-  const schemaArgument = actionText.match(/--json-schema '([^\r\n]+)'/)?.[1];
-  assert.ok(schemaArgument, "schema da revisão ausente");
-  const reviewSchema = JSON.parse(schemaArgument);
-  assert.deepEqual(reviewSchema.properties.findings, { type: "array" }, "itens devem ser validados pela base confiável");
+  assert.doesNotMatch(actionText, /--json-schema\b|StructuredOutput/, "o veredito não depende de structured_output");
+  assert.match(actionText, /objeto JSON (?:completo|único)/i, "a resposta final deve ser um objeto JSON completo");
   assert.doesNotMatch(actionText, /continue-on-error:\s*true/, "falha técnica não pode liberar merge");
 
   const failureStep = reviewSteps.find((step) => step.lines.some((line) => /name:\s*Report inconclusive Claude review/.test(line)));
@@ -324,10 +320,14 @@ test("a revisão Claude tem orçamento medido e falha fechada para erro técnico
   assert.ok(action.index < failureStep.index && failureStep.index < enforcement.index);
   assert.ok(
     enforcement.lines.every((_, index) => topLevelKey(enforcement, index, "if") === null),
-    "o validador precisa rodar após sucesso do Claude, inclusive com saída estruturada vazia"
+    "o validador precisa rodar após sucesso do Claude, inclusive com arquivo de execução vazio"
   );
-  assert.match(enforcement.lines.join("\n"), /steps\.claude\.outputs\.structured_output/);
+  const enforcementText = enforcement.lines.join("\n");
+  assert.match(enforcementText, /CLAUDE_EXECUTION_FILE:\s*\$\{\{\s*steps\.claude\.outputs\.execution_file\s*\}\}/);
+  assert.match(enforcementText, /CLAUDE_ACTION_CONCLUSION:\s*\$\{\{\s*steps\.claude\.outputs\.conclusion\s*\}\}/);
+  assert.doesNotMatch(enforcementText, /structured_output|CLAUDE_REVIEW_JSON/);
   assert.match(runBody(enforcement), /enforce-claude-review\.mjs/);
+  assert.doesNotMatch(runBody(enforcement), /\$\{\{|cat\s|echo\s/, "nenhum output bruto deve entrar no shell");
 });
 
 function jobSetViolations(jobs) {
