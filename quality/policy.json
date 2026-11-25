@@ -1,7 +1,7 @@
 {
   "version": 2,
   "enabled": false,
-  "reason": "A aplicação ainda não foi materializada; a política será ativada depois que a fundação e os canários estiverem na base.",
+  "reason": "A aplicação ainda não foi materializada; o PR 7 ativará a política e provará os gates com canários antes do primeiro PR da aplicação.",
   "commands": [
     {
       "name": "typecheck",
