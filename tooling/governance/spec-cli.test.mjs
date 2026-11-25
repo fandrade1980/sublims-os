@@ -435,3 +435,140 @@ test("a árvore confiável atual, com a spec 004, permanece válida", () => {
   );
   assert.equal(posicional.status, 0, posicional.stderr);
 });
+
+// ---------------------------------------------------------------------------------
+// Caracterização de comportamento herdado.
+//
+// Estes testes não introduzem regra nova: fixam rotas do CLI que já existiam e nunca
+// tinham sido exercitadas. Nasceram verdes, e é esse o ponto — sem eles, uma
+// refatoração futura poderia removê-las sem que nenhuma suíte percebesse.
+// ---------------------------------------------------------------------------------
+
+function raizComSpec(conteudo, { comTarefa = true } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "sublims-spec-"));
+  mkdirSync(join(dir, "specs"));
+  mkdirSync(join(dir, "tasks"));
+  if (comTarefa) writeFileSync(join(dir, "tasks/999-test.md"), "# Tarefa 999\n");
+  const caminho = join(dir, "specs/999-test.md");
+  writeFileSync(caminho, conteudo);
+  return { dir, caminho };
+}
+
+function comIssue(valorJson) {
+  return spec().replace('"issue":"local:tasks/999-test.md"', `"issue":${valorJson}`);
+}
+
+function executar(args) {
+  return spawnSync(process.execPath, [cli, ...args], { encoding: "utf8" });
+}
+
+test("metadata.issue ausente reprova por issue de origem não informada", () => {
+  const semIssue = spec().replace('"issue":"local:tasks/999-test.md",', "");
+  const { caminho } = raizComSpec(semIssue);
+  const result = executar([caminho]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /não informa a issue de origem/i);
+});
+
+// Tipo não textual cai na mesma classe: o campo existe, mas não é utilizável.
+for (const [nome, valorJson] of [
+  ["null", "null"],
+  ["número", "123"],
+  ["objeto", '{"numero":123}'],
+  ["array", '["github:#999"]'],
+  ["booleano", "true"],
+  ["string vazia", '""']
+]) {
+  test(`metadata.issue como ${nome} reprova por issue de origem não informada`, () => {
+    const { caminho } = raizComSpec(comIssue(valorJson));
+    const result = executar([caminho]);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /não informa a issue de origem/i);
+  });
+}
+
+test("combinar --trusted com arquivo posicional reprova por modo ambíguo", () => {
+  const { dir, caminho } = raizComSpec(spec());
+  const result = executar(["--trusted", dir, caminho]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /use modo por arquivo ou modo snapshot, nunca os dois/i);
+});
+
+test("--candidate sem --trusted reprova exigindo a raiz confiável", () => {
+  const { dir } = raizComSpec(spec());
+  const result = executar(["--candidate", dir]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /--trusted é obrigatório no modo snapshot/i);
+});
+
+test("--changed sem --trusted reprova exigindo a raiz confiável", () => {
+  const { dir } = raizComSpec(spec());
+  const lista = join(dir, "changed.txt");
+  writeFileSync(lista, "specs/999-test.md\n");
+  const result = executar(["--changed", lista]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /--trusted é obrigatório no modo snapshot/i);
+});
+
+test("invocação sem argumento algum reprova em vez de aprovar por omissão", () => {
+  const result = executar([]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /informe ao menos um arquivo de especificação ou use --trusted/i);
+});
+
+// ---------------------------------------------------------------------------------
+// Ausência de vazamento de `metadata.issue`.
+//
+// O conteúdo da spec é dado do candidato. Uma referência de issue pode carregar
+// caminho interno, identificador de sistema externo ou qualquer texto que o autor
+// escreveu — e a saída de um gate é pública.
+// ---------------------------------------------------------------------------------
+
+const MARCADOR = "SEGREDO_NAO_EXIBIR";
+
+function assertSemVazamento(result, padraoDaClasse, valorDaIssue) {
+  assert.notEqual(result.status, 0, `aprovou indevidamente: ${result.stdout}`);
+  assert.match(result.stderr, padraoDaClasse);
+  assert.equal(result.stdout, "", "stdout precisa ficar vazio na reprovação");
+  assert.doesNotMatch(result.stderr, new RegExp(MARCADOR), "marcador ecoado em stderr");
+  assert.ok(!result.stderr.includes(valorDaIssue), "valor completo da issue ecoado em stderr");
+  assert.doesNotMatch(result.stderr, /^\s+at\s/m, "stack trace em stderr");
+  assert.doesNotMatch(result.stderr, /node:internal/, "quadro interno do Node em stderr");
+}
+
+test("referência de issue inválida não ecoa o valor recebido", () => {
+  const valor = `jira:${MARCADOR}-4321`;
+  const { caminho } = raizComSpec(comIssue(JSON.stringify(valor)));
+  assertSemVazamento(executar([caminho]), /referência de issue inválida/i, valor);
+});
+
+test("referência local sintaticamente inválida não ecoa o valor recebido", () => {
+  const valor = `local:tasks/../${MARCADOR}.md`;
+  const { caminho } = raizComSpec(comIssue(JSON.stringify(valor)));
+  assertSemVazamento(executar([caminho]), /issue local inválida/i, valor);
+});
+
+test("referência local inexistente não ecoa o caminho procurado", () => {
+  const valor = `local:tasks/999-${MARCADOR.toLowerCase().replace(/_/gu, "-")}.md`;
+  const { caminho } = raizComSpec(comIssue(JSON.stringify(valor)));
+  assertSemVazamento(executar([caminho]), /issue local inexistente/i, valor);
+});
+
+test("referência local que aponta para diretório não ecoa o caminho", () => {
+  const nome = `999-${MARCADOR.toLowerCase().replace(/_/gu, "-")}.md`;
+  const valor = `local:tasks/${nome}`;
+  const { dir, caminho } = raizComSpec(comIssue(JSON.stringify(valor)));
+  mkdirSync(join(dir, "tasks", nome));
+  assertSemVazamento(executar([caminho]), /issue local não é arquivo regular/i, valor);
+});
+
+// `symlinkSkip()` decide antes de o teste correr: no Windows sem privilégio devolve o
+// motivo do skip; em qualquer outra plataforma relança o erro. Capturar a falha aqui
+// dentro mascararia um ambiente Linux quebrado como se fosse limitação conhecida.
+test("referência local por symlink não ecoa o caminho", { skip: symlinkSkip() }, () => {
+  const nome = `999-${MARCADOR.toLowerCase().replace(/_/gu, "-")}.md`;
+  const valor = `local:tasks/${nome}`;
+  const { dir, caminho } = raizComSpec(comIssue(JSON.stringify(valor)));
+  symlinkSync(join(dir, "tasks/999-test.md"), join(dir, "tasks", nome));
+  assertSemVazamento(executar([caminho]), /issue local por symlink não é aceita/i, valor);
+});
