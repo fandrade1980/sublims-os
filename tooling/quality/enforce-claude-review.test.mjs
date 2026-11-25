@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -31,6 +31,43 @@ function runExecution(t, events, conclusion = "success", fallback = "", options 
 function resultEvent(result = approved) {
   return { type: "result", subtype: "success", is_error: false, result: JSON.stringify(result) };
 }
+
+test("publisher recebe somente o resultado final validado e a identidade", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "sublims-review-output-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const execution = join(dir, "execution.json");
+  const meta = join(dir, "meta.json");
+  const output = join(dir, "output.txt");
+  const identity = "a".repeat(64);
+  writeFileSync(execution, JSON.stringify([{ type: "assistant", message: "IGNORAR" }, resultEvent()]));
+  writeFileSync(meta, JSON.stringify({ identity: { digest: identity } }));
+  const run = (env) => {
+    writeFileSync(output, "");
+    const result = spawnSync(process.execPath, [cli, "--emit-verdict"], {
+      encoding: "utf8",
+      env: { ...process.env, RUNNER_TEMP: dir, CLAUDE_EXECUTION_FILE: execution,
+        CLAUDE_ACTION_CONCLUSION: "success", CLAUDE_STEP_OUTCOME: "success",
+        DIFF_OUTCOME: "success", REVIEW_META_FILE: meta, GITHUB_OUTPUT: output, ...env }
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const entries = Object.fromEntries(readFileSync(output, "utf8").trim().split("\n").map((line) => line.split(/=(.*)/s).slice(0, 2)));
+    return { result, verdict: JSON.parse(Buffer.from(entries.payload, "base64").toString("utf8")), identity: entries.identity };
+  };
+  const ok = run();
+  assert.equal(ok.verdict.state, "approved");
+  assert.equal(ok.identity, identity);
+  assert.doesNotMatch(ok.result.stdout + ok.result.stderr, /IGNORAR/);
+  const failedAction = run({ CLAUDE_ACTION_CONCLUSION: "failure" });
+  assert.equal(failedAction.verdict.state, "inconclusive");
+  assert.equal(failedAction.verdict.failure_class, "model_output_invalid");
+  assert.equal(failedAction.identity, "");
+  const failedDiff = run({ DIFF_OUTCOME: "failure", DIFF_CLASS: "preflight_blocked" });
+  assert.equal(failedDiff.verdict.failure_class, "preflight_blocked");
+  assert.equal(failedDiff.identity, "");
+  const critical = { summary: "Falha", critical_count: 1, findings: [{ severity: "critical", title: "Título", evidence: "Evidência", recommendation: "Corrigir" }] };
+  writeFileSync(execution, JSON.stringify([resultEvent(critical)]));
+  assert.equal(run().verdict.state, "critical");
+});
 
 test("aceita somente o JSON textual do único evento final de sucesso", (t) => {
   const result = runExecution(t, [{ type: "assistant", message: "progresso" }, resultEvent()]);

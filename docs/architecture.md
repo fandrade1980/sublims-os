@@ -113,6 +113,12 @@ Registro honesto do que existe hoje:
 - a execução automática dos gates de aplicação é ativada somente no **PR 7**;
 - **estas regras ainda não são aplicadas pelo CI.** Até o PR 7, a conformidade depende de revisão humana.
 
+## Revisão de mudanças binárias
+
+O materializador de revisão por IA recusa arquivos binários, conteúdo não UTF-8 e patches ausentes. O check permanece inconclusivo e bloqueante; ele nunca aprova um subconjunto textual do PR.
+
+Para tratar esse caso, um responsável humano registra no próprio PR o número, o SHA do head e da base, os caminhos e hashes dos blobs afetados, a ferramenta usada para inspecionar o conteúdo binário, o resultado da inspeção de segredos e segurança, e a decisão fundamentada. Uma segunda pessoa revisa esse registro quando exigida pelas regras da branch. Se a proteção da branch não aceitar esse fluxo manual, o PR continua bloqueado até uma exceção pontual autorizada e documentada; a automação não converte a falha em aprovação.
+
 ## Módulo profundo de precificação
 
 Interface inicial conceitual:
