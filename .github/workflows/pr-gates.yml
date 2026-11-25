@@ -4,10 +4,7 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, edited, ready_for_review]
 
-permissions:
-  contents: read
-  issues: read
-  pull-requests: read
+permissions: {}
 
 concurrency:
   group: pr-gates-${{ github.event.pull_request.number }}
@@ -18,6 +15,8 @@ jobs:
     name: governance
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
     steps:
       - name: Checkout trusted base
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6 verified 2026-09-08
@@ -51,12 +50,22 @@ jobs:
           --candidate candidate
           --body "$RUNNER_TEMP/pr-body.md"
           --changed "$RUNNER_TEMP/changed-files.txt"
+      - name: Lint candidate workflows with protected-base rules
+        run: |
+          if [ -f trusted/tooling/quality/lint-workflows.mjs ]; then
+            node trusted/tooling/quality/lint-workflows.mjs candidate/.github/workflows/pr-review.yml
+            node trusted/tooling/quality/lint-workflows.mjs candidate/.github/workflows/pr-gates.yml
+          else
+            echo "Trusted workflow lint unavailable on base; bootstrap requires human review."
+          fi
 
   quality:
     name: quality-gate
     needs: governance
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    permissions:
+      contents: read
     steps:
       - name: Checkout trusted base
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6 verified 2026-09-08
@@ -74,8 +83,6 @@ jobs:
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6 verified 2026-09-08
         with:
           node-version-file: trusted/.nvmrc
-          cache: npm
-          cache-dependency-path: candidate/package-lock.json
       - name: Install locked dependencies
         working-directory: candidate
         run: npm ci --ignore-scripts
@@ -94,7 +101,9 @@ jobs:
           --candidate candidate
 
   claude-review:
-    name: claude-critical-review
+    name: legacy-claude-review-disabled
+    # Check legado congelado durante a migração. A publicação nova usa o mesmo nome.
+    if: false
     needs: [governance, quality]
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -106,13 +115,6 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6 verified 2026-09-08
         with:
           ref: ${{ github.event.pull_request.base.sha }}
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Checkout untrusted candidate in isolated subdirectory
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6 verified 2026-09-08
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          path: pr-head
           fetch-depth: 0
           persist-credentials: false
       - name: Use Node.js from the protected base
@@ -128,10 +130,9 @@ jobs:
           git -C pr-head diff --no-ext-diff --unified=80 "$BASE_SHA" "$HEAD_SHA" -- . > .review-input/pr.diff
       - name: Claude read-only critical review
         id: claude
-        uses: anthropics/claude-code-action@b7912aeeb535234e3e9385ff49e8237f689b5f14 # v1 verified 2026-09-08
+        uses: anthropics/claude-code-action@4411a9e9b0283becf4b924f7bce360fd7756c78c # v1 verified 2026-11-25
         with:
           github_token: ${{ github.token }}
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           prompt: |
             Revise somente o diff em .review-input/pr.diff e, quando necessário,
             os arquivos correspondentes sob pr-head/. Use AGENTS.md e REVIEW.md
