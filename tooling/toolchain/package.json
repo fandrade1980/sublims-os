@@ -9,9 +9,9 @@
     "npm": "11.19.0"
   },
   "devDependencies": {
-    "@typescript-eslint/parser": "8.70.0",
+    "@typescript-eslint/parser": "8.74.0",
     "dependency-cruiser": "18.2.0",
-    "eslint": "10.10.0",
+    "eslint": "10.15.0",
     "typescript": "6.0.3"
   }
 }
